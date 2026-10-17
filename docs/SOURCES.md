@@ -275,3 +275,50 @@ so the next session doesn't have to rediscover it:
   Instagram Business account and its own access token - docs not yet
   read.
 - **Snapchat, Twitch, Kick**: not researched at all yet.
+
+## Telegram bot interface (2026-10-17)
+
+The owner wanted a persistent way to talk to the agents without going
+through this conversation each time - same role Telegram already plays
+for nexus-commerce.
+
+- **Reused, already-verified facts** (from nexus-commerce's own
+  `src/integrations/telegram_client.py` and `docs/SOURCES.md`
+  "Telegram"): the `python-telegram-bot` library, `Bot(token=)`,
+  `bot.send_message(chat_id=, text=, reply_markup=)`,
+  `InlineKeyboardMarkup`/`InlineKeyboardButton`, and the
+  `Application`/`CallbackQueryHandler`/`update.callback_query` shape for
+  receiving button presses.
+- **Newly verified**: `CommandHandler(command, callback)`'s callback
+  signature (`async def callback(update, context)`) and that
+  `context.args` holds the command text split on whitespace - confirmed
+  from python-telegram-bot's own docs.
+- **Not independently doc-verified**: `Bot.send_video`'s exact parameter
+  names and `reply_video`. Both WebFetch attempts (python-telegram-bot's
+  own docs and Telegram's core Bot API page) truncated before reaching
+  the parameter tables - too large to fetch in full for this. The
+  `video=<open file>` call shape mirrors `send_message`'s already-verified
+  pattern, but treat this one as integration-only until exercised with a
+  real bot token, same as nexus-commerce already treats
+  `telegram_listener.build_application`.
+- **The 50MB-per-video cap for bot uploads** is corroborated by several
+  third-party docs mirrors (not fetched from Telegram's own page
+  directly, which truncated before that section). Short episodes
+  (seconds, not minutes, at this project's current resolution) stay well
+  under it - the real stitched test episode was 2.5MB for ~10s of video.
+
+**Design**: `src/bot/conversation.py` (`BotConversation`) holds all the
+decision logic - pure, synchronous, fully unit-tested (18 tests) against
+Mock agents, no Telegram library involved. `src/bot/runner.py` is the
+thin, not-unit-tested async wiring, matching nexus-commerce's own
+documented split for exactly this reason (`telegram_listener.py`'s own
+docstring). `EpisodePipeline.produce()` takes minutes and is synchronous,
+so it runs in the asyncio default executor (a background thread) rather
+than blocking the bot's event loop - confirmed by design, not yet by a
+real multi-chat concurrent run.
+
+**Commands**: `/new [seconds] <idea>` (default 30s) → Writer drafts a
+screenplay, sent back with Approve/Cancel buttons. `/edit <scene#> <new
+text>` revises one beat and resends the draft. Approve → Director
+converts it to visual prompts → EpisodePipeline generates and stitches →
+the finished video is sent back with a Publish-to-YouTube button.

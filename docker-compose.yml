@@ -1,0 +1,11 @@
+services:
+  nexus-studio:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - nexus_studio_output:/data
+
+volumes:
+  nexus_studio_output:

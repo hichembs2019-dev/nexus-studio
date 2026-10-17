@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from .agents.director import DirectorAgent
 from .agents.publisher import PublishingAgent
 from .agents.writer import WriterAgent
+from .bot.conversation import BotConversation
 from .config import Settings
 from .integrations.comfyui_client import ComfyUIClient, MockComfyUIClient, RealComfyUIClient
 from .integrations.publishing_client import MockPublishingClient, PublishingClient, RealYouTubeClient
@@ -34,6 +35,7 @@ class App:
     director: DirectorAgent
     pipeline: EpisodePipeline
     publisher: PublishingAgent
+    conversation: BotConversation
 
 
 def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
@@ -90,6 +92,7 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
         if force_mocks:
             publishing_clients["youtube"] = MockPublishingClient()
     publisher = PublishingAgent(publishing_clients)
+    conversation = BotConversation(writer, director, publisher)
 
     return App(
         settings=settings,
@@ -100,4 +103,5 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
         director=director,
         pipeline=pipeline,
         publisher=publisher,
+        conversation=conversation,
     )

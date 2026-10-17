@@ -20,6 +20,7 @@ class Settings:
     youtube_client_id: str
     youtube_client_secret: str
     youtube_refresh_token: str
+    telegram_bot_token: str
     output_dir: str
 
     @property
@@ -42,6 +43,10 @@ class Settings:
     def youtube_configured(self) -> bool:
         return bool(self.youtube_client_id and self.youtube_client_secret and self.youtube_refresh_token)
 
+    @property
+    def telegram_configured(self) -> bool:
+        return bool(self.telegram_bot_token)
+
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
@@ -55,5 +60,6 @@ class Settings:
             youtube_client_id=os.environ.get("YOUTUBE_CLIENT_ID", ""),
             youtube_client_secret=os.environ.get("YOUTUBE_CLIENT_SECRET", ""),
             youtube_refresh_token=os.environ.get("YOUTUBE_REFRESH_TOKEN", ""),
+            telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
             output_dir=os.environ.get("OUTPUT_DIR", "./output"),
         )
