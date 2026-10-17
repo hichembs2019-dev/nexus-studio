@@ -17,6 +17,9 @@ class Settings:
     gemini_model: str
     jupyter_base_url: str
     jupyter_password: str
+    youtube_client_id: str
+    youtube_client_secret: str
+    youtube_refresh_token: str
     output_dir: str
 
     @property
@@ -35,6 +38,10 @@ class Settings:
     def jupyter_configured(self) -> bool:
         return bool(self.jupyter_base_url and self.jupyter_password)
 
+    @property
+    def youtube_configured(self) -> bool:
+        return bool(self.youtube_client_id and self.youtube_client_secret and self.youtube_refresh_token)
+
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
@@ -45,5 +52,8 @@ class Settings:
             gemini_model=os.environ.get("GEMINI_MODEL", "gemma-4-26b-a4b-it"),
             jupyter_base_url=os.environ.get("JUPYTER_BASE_URL", ""),
             jupyter_password=os.environ.get("JUPYTER_PASSWORD", ""),
+            youtube_client_id=os.environ.get("YOUTUBE_CLIENT_ID", ""),
+            youtube_client_secret=os.environ.get("YOUTUBE_CLIENT_SECRET", ""),
+            youtube_refresh_token=os.environ.get("YOUTUBE_REFRESH_TOKEN", ""),
             output_dir=os.environ.get("OUTPUT_DIR", "./output"),
         )

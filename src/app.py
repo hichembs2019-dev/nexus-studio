@@ -7,9 +7,11 @@ import logging
 from dataclasses import dataclass
 
 from .agents.director import DirectorAgent
+from .agents.publisher import PublishingAgent
 from .agents.writer import WriterAgent
 from .config import Settings
 from .integrations.comfyui_client import ComfyUIClient, MockComfyUIClient, RealComfyUIClient
+from .integrations.publishing_client import MockPublishingClient, PublishingClient, RealYouTubeClient
 from .integrations.reasoning_client import (
     AgentReasoningClient,
     MockAgentReasoningClient,
@@ -31,6 +33,7 @@ class App:
     writer: WriterAgent
     director: DirectorAgent
     pipeline: EpisodePipeline
+    publisher: PublishingAgent
 
 
 def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
@@ -74,6 +77,20 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
     director = DirectorAgent(reasoning)
     pipeline = EpisodePipeline(comfyui, settings.output_dir, remote_exec)
 
+    # Only YouTube has a Real client today (see docs/SOURCES.md "Publishing
+    # - platforms not yet built" for what every other platform needs first).
+    publishing_clients: dict[str, PublishingClient] = {}
+    if not force_mocks and settings.youtube_configured:
+        publishing_clients["youtube"] = RealYouTubeClient(
+            settings.youtube_client_id, settings.youtube_client_secret, settings.youtube_refresh_token
+        )
+    else:
+        if not force_mocks:
+            logger.warning("YOUTUBE_CLIENT_ID/SECRET/REFRESH_TOKEN not set - 'youtube' has no publishing client")
+        if force_mocks:
+            publishing_clients["youtube"] = MockPublishingClient()
+    publisher = PublishingAgent(publishing_clients)
+
     return App(
         settings=settings,
         comfyui=comfyui,
@@ -82,4 +99,5 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
         writer=writer,
         director=director,
         pipeline=pipeline,
+        publisher=publisher,
     )

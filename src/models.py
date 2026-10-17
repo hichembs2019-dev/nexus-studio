@@ -76,3 +76,12 @@ class ProducedEpisode:
     @property
     def total_cost_usd(self) -> float:
         return self.total_generation_seconds * (GPU_HOURLY_COST_USD / 3600)
+
+
+@dataclass
+class PublishResult:
+    platform: str
+    success: bool
+    video_id: str | None = None
+    url: str | None = None
+    error: str | None = None

@@ -29,10 +29,12 @@ src/
   workflows/
     wan_prompt_builder.py             # الرسم البياني الحقيقي المُثبت لـ Wan 2.2
     episode_pipeline.py               # ينفّذ كل مشهد ثم يدمجها
+  agents/publisher.py                 # وكيل النشر: الحلقة -> رفع حقيقي للمنصات
   integrations/
     comfyui_client.py                 # /prompt, /history, /view الحقيقية
     remote_exec_client.py             # تنفيذ أوامر على الخادم بدون SSH (محظور)
-    reasoning_client.py               # Groq - الكتابة والإخراج
+    reasoning_client.py               # Groq (أساسي) + Gemini (احتياطي) - الكتابة والإخراج
+    publishing_client.py              # YouTube (رسم حقيقي من التوثيق الرسمي) - منصات أخرى لم تُبنَ بعد
 ```
 
 **سير العمل الحقيقي (كما طلبه المالك):** فكرة → **الكاتب** يكتب سيناريو كامل
@@ -54,10 +56,10 @@ src/
 ```bash
 pip install -r requirements.txt
 cp .env.example .env   # ثم عبّئ القيم الحقيقية
-pytest -q              # 36 اختباراً، كلها بـ Mock - لا تكلفة حقيقية
+pytest -q              # 51 اختباراً، كلها بـ Mock - لا تكلفة حقيقية
 ```
 
-لتشغيل حلقة حقيقية (الكاتب ثم المخرج ثم التوليد):
+لتشغيل حلقة حقيقية كاملة (الكاتب → المخرج → التوليد → النشر):
 
 ```python
 from src.config import Settings
@@ -72,6 +74,10 @@ for s in screenplay.scenes:
 episode = app.director.plan_episode_from_screenplay(screenplay)   # بعد الموافقة فقط
 produced = app.pipeline.produce(episode)
 print(produced.stitched_path, produced.total_cost_usd)
+
+results = app.publisher.publish_episode(produced, ["youtube"])    # يحتاج YOUTUBE_* حقيقية في .env
+for r in results:
+    print(r.platform, r.success, r.video_id or r.error)
 ```
 
 ## الحالة
@@ -79,8 +85,14 @@ print(produced.stitched_path, produced.total_cost_usd)
 - ✅ التوليد الحقيقي لمشهد واحد ولحلقة من مشهدين مع دمج حقيقي: مُثبت بالكامل
   (زمن + تكلفة + ملف فيديو حقيقي قابل للعب - اختبار 2026-10-17 الحقيقي كلّف
   $0.083 فعلياً).
-- ✅ وكيل الكتابة (فكرة -> سيناريو مقروء): مبني ومُختبر.
-- ✅ وكيل الإخراج (سيناريو معتمد -> مشاهد بصرية، أو فكرة مباشرة كاختصار سريع):
-  مبني ومُختبر.
+- ✅ وكيل الكتابة (فكرة -> سيناريو مقروء): مبني ومُختبر، ومُختبر حقيقياً (عربي →
+  سيناريو عربي متماسك).
+- ✅ وكيل الإخراج (سيناريو معتمد -> مشاهد بصرية): مبني ومُختبر، ومُختبر حقيقياً.
 - ✅ خط أنابيب الحلقة الكاملة (توليد كل مشهد + دمجها): مُثبت على الخادم الحقيقي.
-- ⏳ النشر التلقائي على المنصات (YouTube/TikTok/X/...): غير مبني بعد.
+- ✅ احتياطي Groq → Gemini عند تجاوز الحصة اليومية: مبني ومُختبر حقيقياً.
+- 🟡 وكيل النشر (`PublishingAgent`): مبني ومُختبر بالكامل بـ Mock. **YouTube**
+  فقط له عميل حقيقي (الرسم البياني مأخوذ من توثيق Google الرسمي)، لكن لم يُختبر
+  بمفتاح حقيقي بعد - يحتاج مشروع Google Cloud + OAuth consent مرة واحدة
+  (التفاصيل في `docs/SOURCES.md`).
+- ⏳ TikTok/X/Instagram/Snapchat/Twitch/Kick: لا شيء مبني بعد - التوثيق الرسمي
+  لكل منها لم يُقرأ بعد، فلا تخمين لشكل الطلب.

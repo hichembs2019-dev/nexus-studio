@@ -130,3 +130,63 @@ end-to-end run (Writer screenplay → Director visual prompts) through this
 wiring succeeded end to end the same day, producing a coherent Arabic
 screenplay and its correctly-translated, dialogue-free English visual
 prompts.
+
+## YouTube Data API v3 upload (2026-10-17)
+
+Verified from Google's own official docs (`developers.google.com`), not a
+live authenticated call yet - see "Publishing - platforms not yet built"
+below for exactly what's still missing.
+
+- **Resumable upload, step 1** (start a session):
+  `POST https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status`,
+  headers `Authorization: Bearer <access_token>`,
+  `Content-Type: application/json; charset=UTF-8`,
+  `X-Upload-Content-Length: <file size>`, `X-Upload-Content-Type: video/*`
+  (this project sends `video/mp4`, matching the real `.mp4` files
+  `EpisodePipeline` produces). Body: a `video` resource JSON
+  (`snippet.title`/`description`/`tags`, `status.privacyStatus`).
+  Response: `200 OK`, empty body, the session URI in the `Location`
+  header.
+- **Resumable upload, step 2** (the bytes): `PUT` to that exact URI,
+  `Content-Length`/`Content-Type` matching step 1's `X-Upload-*` headers,
+  raw video bytes as the body. Success: `201 Created`, a `video` resource
+  JSON body whose `id` field is the new video's id.
+- **OAuth token refresh**:
+  `POST https://oauth2.googleapis.com/token`,
+  `application/x-www-form-urlencoded` body
+  `{client_id, client_secret, refresh_token, grant_type: "refresh_token"}`
+  (the page states this value literally). Response:
+  `{access_token, expires_in, scope, token_type}`.
+- `src/integrations/publishing_client.py`'s `RealYouTubeClient` encodes
+  exactly this - `tests/test_publishing_client.py` pins the real header
+  names, the `grant_type` value, and the two-step flow (one test was
+  mutation-tested: flipping `grant_type` to `authorization_code` fails the
+  test, confirming it actually checks the value rather than just
+  existing).
+
+## Publishing - platforms not yet built
+
+Only YouTube has even an unverified-but-doc-sourced client. Nothing exists
+yet for the others - guessing a request shape nobody has read the docs
+for is exactly what this project has committed not to do. What each one
+would actually need, so the next session doesn't have to rediscover it:
+
+- **YouTube** (closest to real): a Google Cloud project with the YouTube
+  Data API v3 enabled, an OAuth 2.0 client (client_id/client_secret), and
+  one real browser consent flow authorizing the
+  `https://www.googleapis.com/auth/youtube.upload` scope to get a
+  `refresh_token` - `RealYouTubeClient` only does the refresh→access_token
+  exchange after that, never the initial consent screen. None of this
+  exists yet; `YOUTUBE_CLIENT_ID`/`YOUTUBE_CLIENT_SECRET`/
+  `YOUTUBE_REFRESH_TOKEN` are all unset, so `build_app` leaves `"youtube"`
+  out of the publishing registry entirely (see `src/app.py`).
+- **TikTok**: Content Posting API requires an approved developer app
+  (manual review by TikTok, not instant) before any upload call works at
+  all - docs not yet read here.
+- **X (Twitter)**: video upload via API v2 needs a paid API tier for
+  reasonable size/duration on the free tier - docs not yet read, pricing
+  not yet re-confirmed for 2026.
+- **Instagram**: Graph API via a Meta/Facebook app plus a connected
+  Instagram Business account and its own access token - docs not yet
+  read.
+- **Snapchat, Twitch, Kick**: not researched at all yet.
