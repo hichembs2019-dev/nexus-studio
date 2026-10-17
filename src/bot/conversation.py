@@ -45,7 +45,7 @@ class BotConversation:
     def handle_new(self, chat_id: str, args_text: str) -> BotReply:
         args_text = args_text.strip()
         if not args_text:
-            return BotReply(text="Usage: /new [seconds] <idea>\nExample: /new 30 A lone astronaut finds a signal on Mars.")
+            return BotReply(text="الاستخدام: /new [عدد الثواني] <الفكرة>\nمثال: /new 30 رائد فضاء وحيد يجد إشارة على المريخ.")
 
         target_seconds = DEFAULT_TARGET_SECONDS
         premise = args_text
@@ -55,43 +55,43 @@ class BotConversation:
             premise = parts[1]
 
         if not premise:
-            return BotReply(text="Give me an idea after the number of seconds, e.g. /new 30 A lone astronaut finds a signal on Mars.")
+            return BotReply(text="أعطني فكرة بعد عدد الثواني، مثلاً: /new 30 رائد فضاء وحيد يجد إشارة على المريخ.")
 
         title = premise[:50]
         screenplay = self._writer.write_screenplay(title, premise, target_seconds)
         self._states[chat_id] = _ChatState(screenplay=screenplay)
-        return BotReply(text=self._format_screenplay(screenplay), buttons=[("✅ Approve", "approve"), ("❌ Cancel", "cancel")])
+        return BotReply(text=self._format_screenplay(screenplay), buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
 
     def handle_edit(self, chat_id: str, args_text: str) -> BotReply:
         state = self._states.get(chat_id)
         if state is None or state.screenplay is None:
-            return BotReply(text="No draft screenplay yet - start with /new.")
+            return BotReply(text="لا توجد مسودة سيناريو بعد - ابدأ بـ /new.")
 
         parts = args_text.strip().split(maxsplit=1)
         if len(parts) != 2 or not parts[0].isdigit():
-            return BotReply(text="Usage: /edit <scene number> <new text>")
+            return BotReply(text="الاستخدام: /edit <رقم المشهد> <النص الجديد>")
 
         scene_number = int(parts[0])
         new_text = parts[1]
         matching = [s for s in state.screenplay.scenes if s.index == scene_number - 1]
         if not matching:
-            return BotReply(text=f"No scene {scene_number} in the current draft (it has {len(state.screenplay.scenes)}).")
+            return BotReply(text=f"لا يوجد مشهد رقم {scene_number} في المسودة الحالية (تحتوي على {len(state.screenplay.scenes)} مشهداً).")
 
         matching[0].text = new_text
-        return BotReply(text=self._format_screenplay(state.screenplay), buttons=[("✅ Approve", "approve"), ("❌ Cancel", "cancel")])
+        return BotReply(text=self._format_screenplay(state.screenplay), buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
 
     def handle_cancel(self, chat_id: str) -> BotReply:
         self._states[chat_id] = _ChatState()
-        return BotReply(text="Draft discarded.")
+        return BotReply(text="تم إلغاء المسودة.")
 
     def handle_approve(self, chat_id: str) -> tuple[BotReply, Episode | None]:
         state = self._states.get(chat_id)
         if state is None or state.screenplay is None:
-            return BotReply(text="No draft screenplay to approve - start with /new."), None
+            return BotReply(text="لا توجد مسودة سيناريو للموافقة عليها - ابدأ بـ /new."), None
 
         episode = self._director.plan_episode_from_screenplay(state.screenplay)
         state.episode = episode
-        reply = BotReply(text=f"⏳ Generating {len(episode.scenes)} scene(s) on the real GPU - this takes a few minutes per scene.")
+        reply = BotReply(text=f"⏳ جارٍ توليد {len(episode.scenes)} مشهد على معالج GPU حقيقي - يستغرق هذا بضع دقائق لكل مشهد.")
         return reply, episode
 
     def format_produced(self, chat_id: str, produced: ProducedEpisode) -> BotReply:
@@ -99,28 +99,28 @@ class BotConversation:
         if produced.stitched_path is None:
             return BotReply(
                 text=(
-                    f"Generated {len(produced.clips)} clip(s) but could not stitch them "
-                    f"(no remote stitcher configured). Real cost so far: ${produced.total_cost_usd:.3f}"
+                    f"تم توليد {len(produced.clips)} مقطع لكن تعذّر دمجها "
+                    f"(لا يوجد دامج عن بُعد مُهيَّأ). التكلفة الحقيقية حتى الآن: ${produced.total_cost_usd:.3f}"
                 )
             )
         return BotReply(
-            text=f"✅ Done. {len(produced.clips)} scene(s), real cost ${produced.total_cost_usd:.3f}.",
+            text=f"✅ تم. {len(produced.clips)} مشهد، التكلفة الحقيقية ${produced.total_cost_usd:.3f}.",
             video_path=produced.stitched_path,
-            buttons=[("📤 Publish to YouTube", "publish:youtube"), ("🗑️ Discard", "discard")],
+            buttons=[("📤 نشر على YouTube", "publish:youtube"), ("🗑️ تجاهل", "discard")],
         )
 
     def handle_publish(self, chat_id: str, platform: str) -> BotReply:
         state = self._states.get(chat_id)
         if state is None or state.produced is None:
-            return BotReply(text="Nothing produced yet to publish.")
+            return BotReply(text="لا يوجد شيء جاهز للنشر بعد.")
 
         results = self._publisher.publish_episode(state.produced, [platform])
         result = results[0]
         if not result.success:
-            return BotReply(text=f"❌ Publish to {platform} failed: {result.error}")
+            return BotReply(text=f"❌ فشل النشر على {platform}: {result.error}")
         if platform == "youtube":
-            return BotReply(text=f"✅ Published to Nexora: https://youtu.be/{result.video_id}")
-        return BotReply(text=f"✅ Published to {platform}: {result.video_id}")
+            return BotReply(text=f"✅ نُشر على قناة Nexora: https://youtu.be/{result.video_id}")
+        return BotReply(text=f"✅ نُشر على {platform}: {result.video_id}")
 
     @staticmethod
     def _format_screenplay(screenplay: Screenplay) -> str:
@@ -128,5 +128,5 @@ class BotConversation:
         for s in screenplay.scenes:
             lines.append(f"{s.index + 1}. {s.text}")
         lines.append("")
-        lines.append("Edit a scene: /edit <number> <new text>")
+        lines.append("لتعديل مشهد: /edit <الرقم> <النص الجديد>")
         return "\n".join(lines)

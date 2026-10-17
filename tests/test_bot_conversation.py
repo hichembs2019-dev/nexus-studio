@@ -25,7 +25,7 @@ def test_new_with_explicit_seconds_writes_a_screenplay_sized_to_them():
 
     assert "beat one" in reply.text
     assert "beat two" in reply.text
-    assert reply.buttons == [("✅ Approve", "approve"), ("❌ Cancel", "cancel")]
+    assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
 
 
 def test_new_without_a_leading_number_uses_the_default_duration_and_whole_text_as_premise():
@@ -43,7 +43,7 @@ def test_new_with_empty_text_asks_for_an_idea_without_calling_the_writer():
 
     reply = conversation.handle_new("chat1", "   ")
 
-    assert "Usage" in reply.text
+    assert "الاستخدام" in reply.text
 
 
 def test_edit_updates_the_named_scene_and_resends_the_screenplay():
@@ -63,7 +63,7 @@ def test_edit_on_an_out_of_range_scene_reports_it_clearly():
 
     reply = conversation.handle_edit("chat1", "5 something")
 
-    assert "No scene 5" in reply.text
+    assert "مشهد رقم 5" in reply.text
 
 
 def test_edit_without_a_draft_tells_the_user_to_start_with_new():
@@ -82,7 +82,7 @@ def test_approve_runs_the_director_and_returns_an_episode():
 
     assert episode is not None
     assert episode.scenes[0].positive_prompt == "a visual shot"
-    assert "Generating 1 scene" in reply.text
+    assert "توليد 1 مشهد" in reply.text
 
 
 def test_approve_without_a_draft_returns_none_episode():
@@ -102,7 +102,7 @@ def test_format_produced_offers_publish_buttons_when_stitched():
     reply = conversation.format_produced("chat1", produced)
 
     assert reply.video_path == "/tmp/out.mp4"
-    assert reply.buttons == [("📤 Publish to YouTube", "publish:youtube"), ("🗑️ Discard", "discard")]
+    assert reply.buttons == [("📤 نشر على YouTube", "publish:youtube"), ("🗑️ تجاهل", "discard")]
     assert "0.009" in reply.text  # 36s * 0.89/3600 ≈ 0.0089
 
 
@@ -115,7 +115,7 @@ def test_format_produced_without_a_stitched_path_reports_cost_without_buttons():
 
     assert reply.video_path is None
     assert reply.buttons is None
-    assert "could not stitch" in reply.text
+    assert "تعذّر دمجها" in reply.text
 
 
 def test_publish_youtube_success_reports_the_real_url():
@@ -126,7 +126,7 @@ def test_publish_youtube_success_reports_the_real_url():
 
     reply = conversation.handle_publish("chat1", "youtube")
 
-    assert reply.text == "✅ Published to Nexora: https://youtu.be/abc123"
+    assert reply.text == "✅ نُشر على قناة Nexora: https://youtu.be/abc123"
     assert youtube.uploads[0]["video_path"] == "/tmp/out.mp4"
 
 
@@ -135,7 +135,7 @@ def test_publish_with_nothing_produced_reports_that():
 
     reply = conversation.handle_publish("chat1", "youtube")
 
-    assert "Nothing produced yet" in reply.text
+    assert "لا يوجد شيء جاهز للنشر" in reply.text
 
 
 def test_publish_to_unconfigured_platform_reports_the_failure():
@@ -146,7 +146,7 @@ def test_publish_to_unconfigured_platform_reports_the_failure():
 
     reply = conversation.handle_publish("chat1", "tiktok")
 
-    assert "failed" in reply.text
+    assert "فشل النشر" in reply.text
     assert "No client configured" in reply.text
 
 
