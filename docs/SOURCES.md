@@ -131,11 +131,11 @@ wiring succeeded end to end the same day, producing a coherent Arabic
 screenplay and its correctly-translated, dialogue-free English visual
 prompts.
 
-## YouTube Data API v3 upload (2026-10-17)
+## YouTube Data API v3 upload (2026-10-17, live-verified)
 
-Verified from Google's own official docs (`developers.google.com`), not a
-live authenticated call yet - see "Publishing - platforms not yet built"
-below for exactly what's still missing.
+Real wire shapes from Google's own official docs, then proven with real
+authenticated calls the same day against a real channel (see "Nexora
+channel setup" below for how the credentials themselves were obtained).
 
 - **Resumable upload, step 1** (start a session):
   `POST https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status`,
@@ -164,22 +164,107 @@ below for exactly what's still missing.
   test, confirming it actually checks the value rather than just
   existing).
 
+## Nexora channel setup (2026-10-17)
+
+Full real setup, done once, end to end, no guessing - kept here so it
+never has to be rediscovered.
+
+**Google Cloud / OAuth client:**
+1. A Google Cloud project, "YouTube Data API v3" enabled.
+2. OAuth consent screen: User type **External** (the only option for a
+   personal, non-Workspace Google account), app name, support/contact
+   email. Stayed in **Testing** status - no Google review needed since
+   only the owner's own account uses it. The owner's own email was added
+   under **Test users** - without this, the consent screen rejects the
+   login entirely.
+3. OAuth client ID, type **Web application**, one authorized redirect URI:
+   `https://developers.google.com/oauthplayground`. The "Use this client
+   for an AI-powered agent" checkbox was left OFF - its real effect is
+   undocumented here, so it was not enabled on an unverified guess.
+4. **Real finding**: the very first resumable-upload call with a brand
+   new OAuth client failed with a real `400 Bad Request`, then an
+   identical call succeeded minutes later. Google's own UI warns
+   "l'applicazione delle impostazioni potrebbe richiedere da cinque minuti
+   a qualche ora" (settings can take five minutes to a few hours to
+   propagate) - this is that delay, not a bug in the client code.
+
+**Getting a refresh_token (Google OAuth Playground):**
+`developers.google.com/oauthplayground` → gear icon → Access type
+**Offline**, check "Use your own OAuth credentials", paste the client
+ID/secret → scope box (bottom of the API list) → paste
+`https://www.googleapis.com/auth/youtube.upload` → Authorize APIs → sign
+in as the test user → accept the real "Google hasn't verified this app"
+warning (expected for a Testing-status app, not a sign of a problem) →
+Exchange authorization code for tokens → `refresh_token` appears in the
+JSON response.
+
+**Real finding - transcription errors are not negligible**: reading a
+long `refresh_token` off a phone screenshot produced a token that failed
+with `invalid_grant` twice (an `O`/`0` and a missing character each time).
+Copying the raw page text (long-press → select all → copy) and reading
+the token out of that exact text fixed it immediately both times. For any
+credential this long, treat a screenshot-read value as provisional until
+tested, and prefer copied text over an image whenever the sender can get
+it.
+
+**Real finding - a video description can get a real validation error**:
+the first real upload attempt with a description containing `->` failed
+with
+`{"error": {"code": 400, "message": "The request metadata specifies an invalid video description.", "reason": "invalidDescription"}}`.
+Isolated empirically (not guessed) by retrying three description strings
+differing only in whether they contained `->` - only that one failed.
+Avoid literal `->` arrows in descriptions built for this client.
+
+**Real finding - a Brand Account channel needs its own authorization,
+and `videos.list`/`videos.delete` need a broader scope**: the channel's
+display name ("Nexora", logo "Nexora Global") was set up after the first
+real upload, through YouTube Studio directly (Create a channel → custom
+name) rather than through this project's code - no Data API v3 endpoint
+creates a channel for an ordinary account. A second, separate OAuth
+Playground run (fresh authorization code, fresh refresh_token) was needed
+afterward; the resulting upload was confirmed to land on the Nexora
+channel by checking YouTube Studio's own channel switcher in the browser,
+not through this project's code, since the `youtube.upload` scope this
+client intentionally requests does **not** cover `videos.list` (confirmed
+live: a real `channels`/`videos` read with an upload-scoped token returned
+`403 ACCESS_TOKEN_SCOPE_INSUFFICIENT`) or `videos.delete` (its own docs
+list only `youtube`, `youtubepartner`, `youtube.force-ssl` as valid
+scopes - deliberately broader than this project requests, so cleanup of
+stray test uploads was done by hand in YouTube Studio, not via this
+client).
+- **Real finding - channel renames are rate-limited**: YouTube rejected
+  two name values in a row ("Nexora studio" - likely a reserved word
+  pattern; a second value that was actually meant for the description
+  field, a mistake caught before it cost another attempt) and then
+  blocked further rename attempts for **24 hours** with "Hai inserito
+  troppi nomi che non possono essere utilizzati" - independent of whether
+  the next name tried would itself have been valid. The channel's image
+  and description saved without being affected by the name being locked.
+- Two real videos were uploaded to the live Nexora channel as proof
+  (`private`, since this was setup verification, not real content):
+  `https://youtu.be/c5SITEMGKvo` (3.37s upload) and
+  `https://youtu.be/3ZcGjjlJo84` (2.96s upload, the one confirmed to
+  target Nexora specifically). Both, plus three orphaned pending sessions
+  left over from the description-isolation testing above (a `POST` that
+  returns `200`+`Location` already creates a real, visible placeholder
+  video entry even if step 2 is never sent), were deleted by hand from
+  YouTube Studio afterward - this project's `RealYouTubeClient` has no
+  delete method, deliberately: it was built with only the `youtube.upload`
+  scope it actually needs.
+
+Real values now live in this project's own (gitignored) `.env`:
+`YOUTUBE_CLIENT_ID`, `YOUTUBE_CLIENT_SECRET`, `YOUTUBE_REFRESH_TOKEN` -
+all pointed at the Nexora channel specifically, not the owner's personal
+one.
+
 ## Publishing - platforms not yet built
 
-Only YouTube has even an unverified-but-doc-sourced client. Nothing exists
-yet for the others - guessing a request shape nobody has read the docs
-for is exactly what this project has committed not to do. What each one
-would actually need, so the next session doesn't have to rediscover it:
+YouTube now has a live, working client against a real channel (see
+"Nexora channel setup" above). Nothing exists yet for the others -
+guessing a request shape nobody has read the docs for is exactly what
+this project has committed not to do. What each one would actually need,
+so the next session doesn't have to rediscover it:
 
-- **YouTube** (closest to real): a Google Cloud project with the YouTube
-  Data API v3 enabled, an OAuth 2.0 client (client_id/client_secret), and
-  one real browser consent flow authorizing the
-  `https://www.googleapis.com/auth/youtube.upload` scope to get a
-  `refresh_token` - `RealYouTubeClient` only does the refresh→access_token
-  exchange after that, never the initial consent screen. None of this
-  exists yet; `YOUTUBE_CLIENT_ID`/`YOUTUBE_CLIENT_SECRET`/
-  `YOUTUBE_REFRESH_TOKEN` are all unset, so `build_app` leaves `"youtube"`
-  out of the publishing registry entirely (see `src/app.py`).
 - **TikTok**: Content Posting API requires an approved developer app
   (manual review by TikTok, not instant) before any upload call works at
   all - docs not yet read here.
