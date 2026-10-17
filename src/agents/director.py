@@ -30,6 +30,7 @@ Rules:
 - Output ONLY a JSON array of strings, nothing else - no markdown fences, no commentary.
 - The array must have EXACTLY {scene_count} elements, one per screenplay beat below, IN THE SAME ORDER.
 - Each element is a vivid, visual-only scene description IN ENGLISH for a ~5-second text-to-video clip: concrete subject, setting, action, lighting, camera framing. Translate or adapt any dialogue into a visible action instead - the video model cannot render speech or subtitles.
+- The video model defaults to East Asian faces when ethnicity is not stated. If the screenplay's names, language or setting imply a specific ethnicity, nationality or region (e.g. Tunisian, North African, Arab, Sub-Saharan African, South Asian...), EVERY scene description that shows a person's face must explicitly state that ethnicity/appearance (e.g. "a Tunisian woman in her 70s" rather than just "a woman"). Carry the same ethnicity across all scenes of the same characters - do not vary it scene to scene.
 - No dialogue, no sound cues, no scene numbers."""
 
 

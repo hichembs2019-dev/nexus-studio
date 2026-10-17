@@ -322,3 +322,62 @@ screenplay, sent back with Approve/Cancel buttons. `/edit <scene#> <new
 text>` revises one beat and resends the draft. Approve → Director
 converts it to visual prompts → EpisodePipeline generates and stitches →
 the finished video is sent back with a Publish-to-YouTube button.
+
+**Real finding, 2026-10-17 - conversation state does not survive a
+redeploy**: `BotConversation._states` is a plain in-memory dict. A real
+owner session hit this directly: a screenplay was approved, a redeploy
+(rolling the pod URL after the original RunPod host ran out of capacity,
+see "RunPod host capacity" below) restarted the bot container mid-flow,
+and the next Approve tap on the still-visible old message came back "no
+draft screenplay" - the state was gone. Known limitation, not yet fixed;
+a real-state fix (SQLite, matching nexus-commerce's own persistence
+convention) is the natural next step once this project needs to survive
+redeploys without losing an in-progress draft.
+
+## RunPod host capacity (2026-10-17)
+
+A stopped pod's GPU is NOT reserved for it - starting it again can fail
+with a real `400`:
+`"There are not enough free GPUs on the host machine to start this pod."`
+(hint: "For a stopped Pod, its host's GPUs are taken; that Pod can only
+start once they free up.") Confirmed live: the original pod
+(`6enpyl3ark8ck8`) failed to restart after being stopped to save money:
+`get-data-center(EU-RO-1, include: GPU_AVAILABILITY)` showed real RTX
+4090 stock at "LOW" (not zero) for the region, but that specific host had
+none free. The real fix was not retrying the same pod but creating a
+*new* pod (`create-pod`, same template/GPU/region, same real cost
+$0.89/hr) with the **same network volume** (`hwee6i9g4o`) mounted - a new
+pod can land on a different host with free capacity, and the volume
+(with every model already on it) is independent of which pod mounts it.
+The dead pod was terminated afterward. Net effect: a region-level "stop
+to save money, start again later" policy is not actually safe for a
+single pinned pod on scarce stock - expect to recreate the pod (reusing
+the volume) some fraction of the time, and update
+`COMFYUI_BASE_URL`/`JUPYTER_BASE_URL`/`JUPYTER_PASSWORD` (pod-id-specific)
+wherever they're configured (this project's `.env`) when it happens.
+
+## Wan 2.2 real content gaps (2026-10-17)
+
+Both found live, by the owner, from actual output - not caught by any
+test, because neither is a code bug:
+
+- **No audio at all.** Wan 2.2 TI2V-5B (as used here, pure text-to-video)
+  produces silent video - this was never built or promised, and should
+  have been stated plainly before the first real test rather than left
+  for the owner to discover. Real dialogue/voice would need a separate
+  pipeline stage (TTS + lip-sync, or a different Wan 2.2 variant such as
+  the S2V - speech-to-video - checkpoints already listed in the
+  Comfy-Org repo's file manifest, see "Wan 2.2 TI2V-5B real generation"
+  above) - not built, real additional GPU time and engineering.
+- **Wrong ethnicity by default.** A screenplay about a Tunisian family,
+  translated into English-only visual prompts with no ethnicity stated,
+  rendered East Asian faces - Wan 2.2's own default bias when appearance
+  isn't specified (a Chinese-developed model). Fixed in
+  `DirectorAgent`'s screenplay-to-visual system prompt: when the
+  screenplay's names/language/setting imply a specific ethnicity or
+  nationality, every scene description showing a face must state it
+  explicitly, consistently across all scenes of the same characters -
+  locked in by
+  `test_plan_episode_from_screenplay_system_prompt_instructs_carrying_ethnicity`.
+  Not yet re-verified with a real generation (the fix was made but no
+  new real video has been produced with it yet).

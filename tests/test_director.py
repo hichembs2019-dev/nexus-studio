@@ -94,6 +94,22 @@ def test_plan_episode_from_screenplay_sends_the_numbered_beats_and_keeps_order()
     assert "2. He finds a glowing device." in user_prompt
 
 
+def test_plan_episode_from_screenplay_system_prompt_instructs_carrying_ethnicity():
+    # Real finding: Wan 2.2 defaults to East Asian faces when ethnicity is
+    # unstated, so a Tunisian/Arab/etc. screenplay rendered East Asian
+    # faces until the Director was told to carry that detail into every
+    # scene's visual prompt explicitly.
+    screenplay = Screenplay(title="T", premise="p", scenes=[ScreenplayScene(index=0, text="a")])
+    reasoning = MockAgentReasoningClient(scripted_replies=[json.dumps(["a visual shot"])])
+    director = DirectorAgent(reasoning)
+
+    director.plan_episode_from_screenplay(screenplay)
+
+    system_prompt, _ = reasoning.calls[0]
+    assert "ethnicity" in system_prompt.lower()
+    assert "East Asian" in system_prompt
+
+
 def test_plan_episode_from_screenplay_scene_count_follows_the_screenplay_not_a_fixed_default():
     screenplay = Screenplay(title="T", premise="p", scenes=[ScreenplayScene(index=0, text="only one beat")])
     reasoning = MockAgentReasoningClient(scripted_replies=[json.dumps(["one visual shot"])])
