@@ -21,6 +21,10 @@ class Settings:
     youtube_client_secret: str
     youtube_refresh_token: str
     telegram_bot_token: str
+    azure_speech_key: str
+    azure_speech_region: str
+    azure_tts_voice: str
+    azure_tts_lang: str
     output_dir: str
 
     @property
@@ -47,6 +51,10 @@ class Settings:
     def telegram_configured(self) -> bool:
         return bool(self.telegram_bot_token)
 
+    @property
+    def azure_speech_configured(self) -> bool:
+        return bool(self.azure_speech_key and self.azure_speech_region)
+
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
@@ -61,5 +69,9 @@ class Settings:
             youtube_client_secret=os.environ.get("YOUTUBE_CLIENT_SECRET", ""),
             youtube_refresh_token=os.environ.get("YOUTUBE_REFRESH_TOKEN", ""),
             telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", ""),
+            azure_speech_key=os.environ.get("AZURE_SPEECH_KEY", ""),
+            azure_speech_region=os.environ.get("AZURE_SPEECH_REGION", ""),
+            azure_tts_voice=os.environ.get("AZURE_TTS_VOICE", "ar-TN-HediNeural"),
+            azure_tts_lang=os.environ.get("AZURE_TTS_LANG", "ar-TN"),
             output_dir=os.environ.get("OUTPUT_DIR", "./output"),
         )

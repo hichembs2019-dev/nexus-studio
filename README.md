@@ -37,6 +37,7 @@ src/
     comfyui_client.py                 # /prompt, /history, /view الحقيقية
     remote_exec_client.py             # تنفيذ أوامر على الخادم بدون SSH (محظور)
     reasoning_client.py               # Groq (أساسي) + Gemini (احتياطي) - الكتابة والإخراج
+    tts_client.py                     # Azure Speech REST - تعليق صوتي حقيقي بلهجة السيناريو
     publishing_client.py              # YouTube (رسم حقيقي من التوثيق الرسمي) - منصات أخرى لم تُبنَ بعد
     telegram_client.py                # إرسال رسائل/فيديوهات Telegram
 main.py                               # نقطة تشغيل البوت كخدمة دائمة (python -m src.main)
@@ -55,6 +56,11 @@ main.py                               # نقطة تشغيل البوت كخدم�
 - **SSH محظور** من بيئة التنفيذ (port 22 - مؤكد بالفحص الحقيقي، ليس افتراضاً)،
   فالدمج النهائي للمشاهد (ffmpeg) ينفَّذ على الخادم نفسه عبر Jupyter
   (`remote_exec_client.py`)، لا عبر SSH.
+- **الصوت حقيقي**: عند توفر `AZURE_SPEECH_KEY`/`AZURE_SPEECH_REGION`، كل مشهد
+  يُروى بنص السيناريو نفسه (بلهجته الأصلية - تونسي افتراضياً عبر
+  `ar-TN-HediNeural`) عبر Azure AI Speech الحقيقي، ويُدمج على المقطع محلياً
+  بـ ffmpeg (انظر `docs/SOURCES.md` "Azure TTS voiceover" للتفاصيل والدليل
+  الكامل). بدون المفتاح، الحلقة تُنتَج صامتة كما كانت.
 
 ## التشغيل
 

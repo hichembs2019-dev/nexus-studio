@@ -43,9 +43,9 @@ def build_application(bot_token: str, conversation: BotConversation, pipeline: E
             with open(reply.video_path, "rb") as f:
                 await context.bot.send_video(chat_id=chat_id, video=f)
 
-    async def _produce_and_notify(chat_id: str, episode, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _produce_and_notify(chat_id: str, episode, narration_texts, context: ContextTypes.DEFAULT_TYPE) -> None:
         loop = asyncio.get_running_loop()
-        produced = await loop.run_in_executor(None, pipeline.produce, episode)
+        produced = await loop.run_in_executor(None, pipeline.produce, episode, narration_texts)
         reply = conversation.format_produced(chat_id, produced)
         await _send_reply(chat_id, context, reply)
 
@@ -71,10 +71,10 @@ def build_application(bot_token: str, conversation: BotConversation, pipeline: E
         data = query.data
 
         if data == "approve":
-            reply, episode = conversation.handle_approve(chat_id)
+            reply, episode, narration_texts = conversation.handle_approve(chat_id)
             await _send_reply(chat_id, context, reply)
             if episode is not None:
-                asyncio.create_task(_produce_and_notify(chat_id, episode, context))
+                asyncio.create_task(_produce_and_notify(chat_id, episode, narration_texts, context))
         elif data in ("cancel", "discard"):
             reply = conversation.handle_cancel(chat_id)
             await _send_reply(chat_id, context, reply)

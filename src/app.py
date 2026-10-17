@@ -20,6 +20,7 @@ from .integrations.reasoning_client import (
     RealGroqReasoningClient,
 )
 from .integrations.remote_exec_client import MockRemoteExecClient, RealJupyterRemoteExecClient, RemoteExecClient
+from .integrations.tts_client import MockTTSClient, RealAzureTTSClient, TTSClient
 from .workflows.episode_pipeline import EpisodePipeline
 
 logger = logging.getLogger("nexus_studio")
@@ -77,7 +78,19 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
 
     writer = WriterAgent(reasoning)
     director = DirectorAgent(reasoning)
-    pipeline = EpisodePipeline(comfyui, settings.output_dir, remote_exec)
+
+    tts: TTSClient | None
+    if not force_mocks and settings.azure_speech_configured:
+        tts = RealAzureTTSClient(settings.azure_speech_key, settings.azure_speech_region)
+    else:
+        if not force_mocks:
+            logger.warning("AZURE_SPEECH_KEY/REGION not set - episodes will be produced silent")
+        tts = MockTTSClient() if force_mocks else None
+
+    pipeline = EpisodePipeline(
+        comfyui, settings.output_dir, remote_exec,
+        tts=tts, tts_voice=settings.azure_tts_voice, tts_lang=settings.azure_tts_lang,
+    )
 
     # Only YouTube has a Real client today (see docs/SOURCES.md "Publishing
     # - platforms not yet built" for what every other platform needs first).

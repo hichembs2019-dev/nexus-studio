@@ -78,19 +78,30 @@ def test_approve_runs_the_director_and_returns_an_episode():
     conversation, _ = _conversation([json.dumps(["beat one"]), json.dumps(["a visual shot"])])
     conversation.handle_new("chat1", f"{int(CLIP_SECONDS)} idea")
 
-    reply, episode = conversation.handle_approve("chat1")
+    reply, episode, narration_texts = conversation.handle_approve("chat1")
 
     assert episode is not None
     assert episode.scenes[0].positive_prompt == "a visual shot"
     assert "توليد 1 مشهد" in reply.text
 
 
+def test_approve_returns_the_screenplays_own_text_as_narration_so_tts_narrates_in_the_original_language():
+    conversation, _ = _conversation([json.dumps(["beat one", "beat two"]), json.dumps(["shot a", "shot b"])])
+    conversation.handle_new("chat1", f"{int(2 * CLIP_SECONDS)} idea")
+
+    _, episode, narration_texts = conversation.handle_approve("chat1")
+
+    assert narration_texts == ["beat one", "beat two"]
+    assert narration_texts != [s.positive_prompt for s in episode.scenes]  # narration is the ORIGINAL-language beat, not the English visual prompt
+
+
 def test_approve_without_a_draft_returns_none_episode():
     conversation, _ = _conversation([])
 
-    reply, episode = conversation.handle_approve("chat1")
+    reply, episode, narration_texts = conversation.handle_approve("chat1")
 
     assert episode is None
+    assert narration_texts is None
     assert "/new" in reply.text
 
 
@@ -155,9 +166,10 @@ def test_cancel_clears_the_draft_so_approve_then_fails():
     conversation.handle_new("chat1", f"{int(CLIP_SECONDS)} idea")
 
     conversation.handle_cancel("chat1")
-    reply, episode = conversation.handle_approve("chat1")
+    reply, episode, narration_texts = conversation.handle_approve("chat1")
 
     assert episode is None
+    assert narration_texts is None
     assert "/new" in reply.text
 
 

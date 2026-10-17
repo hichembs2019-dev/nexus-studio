@@ -84,15 +84,16 @@ class BotConversation:
         self._states[chat_id] = _ChatState()
         return BotReply(text="تم إلغاء المسودة.")
 
-    def handle_approve(self, chat_id: str) -> tuple[BotReply, Episode | None]:
+    def handle_approve(self, chat_id: str) -> tuple[BotReply, Episode | None, list[str] | None]:
         state = self._states.get(chat_id)
         if state is None or state.screenplay is None:
-            return BotReply(text="لا توجد مسودة سيناريو للموافقة عليها - ابدأ بـ /new."), None
+            return BotReply(text="لا توجد مسودة سيناريو للموافقة عليها - ابدأ بـ /new."), None, None
 
         episode = self._director.plan_episode_from_screenplay(state.screenplay)
         state.episode = episode
+        narration_texts = [s.text for s in state.screenplay.scenes]
         reply = BotReply(text=f"⏳ جارٍ توليد {len(episode.scenes)} مشهد على معالج GPU حقيقي - يستغرق هذا بضع دقائق لكل مشهد.")
-        return reply, episode
+        return reply, episode, narration_texts
 
     def format_produced(self, chat_id: str, produced: ProducedEpisode) -> BotReply:
         self._states.setdefault(chat_id, _ChatState()).produced = produced

@@ -381,3 +381,111 @@ test, because neither is a code bug:
   `test_plan_episode_from_screenplay_system_prompt_instructs_carrying_ethnicity`.
   Not yet re-verified with a real generation (the fix was made but no
   new real video has been produced with it yet).
+
+## Azure TTS voiceover (2026-10-17)
+
+Real fix for the first gap above ("no audio at all"). Everything below was
+checked live against a real, owner-created Azure resource - not assumed.
+
+### Resource
+
+Created via the real, current official path for this: `portal.azure.com`
+→ search "Microsoft Foundry" → "Creare una risorsa Foundry". The
+"Earlier-generation"/classic Speech resource blade was the first thing
+tried and was wrong - corrected after fetching Microsoft's own quickstart
+docs rather than guessing a second time.
+
+- Resource name: `nexus-studio-speech`, resource group `nexus-studio-speech`
+- Region: `eastus` - chosen because it was the portal's own default, then
+  verified (not assumed) against the real region/feature table at
+  `learn.microsoft.com/azure/ai-services/speech-service/regions`: `eastus`
+  shows ✅ for Neural text to speech, HD voices, Personal voice and Voice
+  conversion.
+- Endpoint: `https://nexus-studio-speech.services.ai.azure.com/`
+- Real key/region live in the server's `.env` as `AZURE_SPEECH_KEY` /
+  `AZURE_SPEECH_REGION=eastus`, never committed (`.env` is gitignored).
+
+### The real REST contract (classic `cognitiveservices/v1`, not Voice Live)
+
+Verified against Microsoft's own docs, then proven against the real
+resource with two live calls the same day:
+
+- `GET https://eastus.tts.speech.microsoft.com/cognitiveservices/voices/list`
+  with only `Ocp-Apim-Subscription-Key` → real `200`, 958 voices returned.
+  Filtered for `ar-TN`: **`ar-TN-ReemNeural` (female) and `ar-TN-HediNeural`
+  (male), both `Status: GA`** - voice hosting is NOT limited to a handful
+  of regions as the general region/feature table alone might suggest; this
+  was checked directly against the real resource rather than assumed from
+  that table.
+- `POST https://eastus.tts.speech.microsoft.com/cognitiveservices/v1` with
+  `Ocp-Apim-Subscription-Key`, `Content-Type: application/ssml+xml;
+  charset=utf-8`, `X-Microsoft-OutputFormat: audio-24khz-48kbitrate-mono-mp3`,
+  `User-Agent`, and an SSML body (`<speak version='1.0' xml:lang='ar-TN'>
+  <voice name='ar-TN-HediNeural'>...</voice></speak>`) → real `200`, a
+  genuine 25,920-byte, 4.32s playable MP3 (`ffprobe` confirmed: MPEG
+  Layer III, 48kbps, 24kHz, mono). **No token exchange step is needed** -
+  the subscription key works directly on the synthesize call itself.
+  Sent to the owner as a real file so they could hear it directly on the
+  phone, per the "has to be visible/audible on the device itself" rule.
+
+### Pipeline wiring (`src/workflows/episode_pipeline.py`)
+
+`EpisodePipeline` takes an optional `TTSClient`; `produce()` takes an
+optional `narration_texts` list aligned 1:1 with `episode.scenes` by
+index. The narration source is the **Screenplay's own scene text** - the
+original-language narrative beat the owner wrote/edited - not the
+Director's English visual prompt, which describes the shot, not what
+should be said. `BotConversation.handle_approve()` now returns
+`(reply, episode, narration_texts)` instead of `(reply, episode)`; wired
+through `runner.py`'s `_produce_and_notify` into `pipeline.produce()`.
+
+Two real defects found and fixed before this shipped, each with a
+mutation-tested guard (removed, confirmed the test failed; restored,
+confirmed it passed again):
+
+1. **A longer narration must not be cut to the clip's length.** A plain
+   audio/video merge (`ffmpeg -i video -i audio -c:v copy -c:a aac`, no
+   `-shortest`) does NOT truncate the *container* - `ffprobe` reports the
+   full audio-length duration regardless of whether the video stream was
+   actually extended. The first version of this guard checked container
+   duration and passed even with the real fix deleted - a false guard,
+   the same category of mistake this project has hit before (scene
+   watchdog, screen wake tests). Rewritten to check the **video stream's
+   own frame count** instead
+   (`test_narration_longer_than_the_clip_freezes_the_last_frame_instead_of_cutting_it_short`),
+   which does fail without the fix. The real fix: when `audio_duration >
+   video_duration`, `ffmpeg`'s `tpad=stop_mode=clone` filter freezes the
+   last real video frame to cover the rest, so the full narration is
+   always heard.
+2. **Multi-scene stitching must not silently drop the audio.** The
+   existing remote stitcher (`_stitch_remote`) concatenates the
+   *original silent* clips still sitting in ComfyUI's own output
+   directory on the GPU pod - it has no idea the narrated copies exist
+   locally. Left unchanged, a multi-scene episode with narration would
+   stitch back together perfectly and be completely silent again at the
+   very last step. Fixed: when any scene was narrated, `_finalize()`
+   stitches the local narrated clips instead
+   (`_stitch_local`, concat demuxer, re-encoded for stream consistency)
+   and never calls the remote stitcher - guarded by
+   `test_multi_scene_with_narration_stitches_locally_and_keeps_the_audio`.
+
+`ffmpeg`/`ffprobe` are required for all of this and are now installed in
+the Docker image (`Dockerfile`: `apt-get install ffmpeg` before the pip
+install step) - without them every episode goes back to silent even with
+`AZURE_SPEECH_KEY` set.
+
+### Not yet done
+
+- No real end-to-end test has been run yet with the deployed bot (real
+  Groq/Director screenplay → real GPU clip → real Azure narration →
+  real stitched output with audio, heard on the owner's phone). The unit
+  tests above prove the merge/stitch logic is correct against real
+  ffmpeg; they do not replace a real production run.
+- Narration length vs. `CLIP_SECONDS` (5.04s) trade-off is unmeasured in
+  practice: a long screenplay beat read by Azure TTS may regularly run
+  well past 5s, which means regularly-frozen tails rather than natural
+  motion for most of the narration. If that turns out to be common, the
+  real fix is sizing each scene's `length` (Wan prompt builder, already a
+  free parameter) to the narration's own measured duration instead of a
+  fixed 121 frames - not built, would need the narration synthesized
+  *before* the Director/generation step rather than after.
