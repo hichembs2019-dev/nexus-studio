@@ -10,7 +10,12 @@ from .agents.director import DirectorAgent
 from .agents.writer import WriterAgent
 from .config import Settings
 from .integrations.comfyui_client import ComfyUIClient, MockComfyUIClient, RealComfyUIClient
-from .integrations.reasoning_client import AgentReasoningClient, MockAgentReasoningClient, RealGroqReasoningClient
+from .integrations.reasoning_client import (
+    AgentReasoningClient,
+    MockAgentReasoningClient,
+    RealGeminiReasoningClient,
+    RealGroqReasoningClient,
+)
 from .integrations.remote_exec_client import MockRemoteExecClient, RealJupyterRemoteExecClient, RemoteExecClient
 from .workflows.episode_pipeline import EpisodePipeline
 
@@ -44,11 +49,25 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
             logger.warning("JUPYTER_BASE_URL/JUPYTER_PASSWORD not set - no remote stitching, single-scene episodes only")
         remote_exec = None if not force_mocks else MockRemoteExecClient()
 
+    # Real finding 2026-10-17 (docs/SOURCES.md "Groq org-wide quota"): a
+    # second Groq key under the same account shares nexus-commerce's own
+    # daily token quota - not real isolation. Gemini is a genuinely
+    # separate account/quota, so it rides along as Groq's fallback here,
+    # same wiring nexus-commerce already uses (src/app.py there).
     if not force_mocks and settings.groq_configured:
-        reasoning: AgentReasoningClient = RealGroqReasoningClient(settings.groq_api_key, settings.groq_model)
+        gemini_fallback = (
+            RealGeminiReasoningClient(settings.gemini_api_key, settings.gemini_model)
+            if settings.gemini_configured
+            else None
+        )
+        reasoning: AgentReasoningClient = RealGroqReasoningClient(
+            settings.groq_api_key, settings.groq_model, fallback=gemini_fallback
+        )
+    elif not force_mocks and settings.gemini_configured:
+        reasoning = RealGeminiReasoningClient(settings.gemini_api_key, settings.gemini_model)
     else:
         if not force_mocks:
-            logger.warning("GROQ_API_KEY not set - using MockAgentReasoningClient")
+            logger.warning("Neither GROQ_API_KEY nor GEMINI_API_KEY set - using MockAgentReasoningClient")
         reasoning = MockAgentReasoningClient()
 
     writer = WriterAgent(reasoning)

@@ -98,3 +98,35 @@ nexus-commerce on 2026-10-14 (see that project's `docs/SOURCES.md` "Groq
 fallback"): `POST https://api.groq.com/openai/v1/chat/completions`,
 `Authorization: Bearer <key>`, OpenAI-compatible
 `choices[0].message.content`. Reused here as an already-verified fact.
+
+## Groq org-wide quota (2026-10-17)
+
+First real end-to-end test of `WriterAgent`/`DirectorAgent.plan_episode_from_screenplay`
+used nexus-commerce's existing Groq key and hit a real `429`-shaped error
+on the Writer call:
+
+```
+Rate limit reached for model `openai/gpt-oss-120b` in organization
+org_01m4xav43be8j956tk3w9jt3tg ... tokens per day (TPD): Limit 200000,
+Used 199562
+```
+
+A second, brand-new Groq key was created (named "Nexora studio" in the
+Groq console, confirmed via screenshot alongside the existing "Nexora
+commerce" key - both listed under the same `Personal / Default Project`).
+Retrying with the new key hit the exact same wall seconds later (`Used:
+199974/200000`, same `organization` id) - **a second key under the same
+Groq account does not get its own TPD quota**; the limit is scoped to the
+account/organization, not the key. This directly invalidated an earlier
+assumption in this project's own commit history ("a dedicated Groq key
+avoids quota contention with nexus-commerce") - corrected here rather
+than left standing once the live test disproved it.
+
+Fix: `RealGroqReasoningClient` gained the same optional `fallback`
+constructor parameter nexus-commerce's own client already uses, wired in
+`src/app.py` to `RealGeminiReasoningClient` (a genuinely separate
+account/quota - Google AI, not Groq) when `GEMINI_API_KEY` is set. A real
+end-to-end run (Writer screenplay → Director visual prompts) through this
+wiring succeeded end to end the same day, producing a coherent Arabic
+screenplay and its correctly-translated, dialogue-free English visual
+prompts.
