@@ -7,6 +7,7 @@ import logging
 from dataclasses import dataclass
 
 from .agents.director import DirectorAgent
+from .agents.writer import WriterAgent
 from .config import Settings
 from .integrations.comfyui_client import ComfyUIClient, MockComfyUIClient, RealComfyUIClient
 from .integrations.reasoning_client import AgentReasoningClient, MockAgentReasoningClient, RealGroqReasoningClient
@@ -22,6 +23,7 @@ class App:
     comfyui: ComfyUIClient
     remote_exec: RemoteExecClient | None
     reasoning: AgentReasoningClient
+    writer: WriterAgent
     director: DirectorAgent
     pipeline: EpisodePipeline
 
@@ -49,7 +51,16 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
             logger.warning("GROQ_API_KEY not set - using MockAgentReasoningClient")
         reasoning = MockAgentReasoningClient()
 
+    writer = WriterAgent(reasoning)
     director = DirectorAgent(reasoning)
     pipeline = EpisodePipeline(comfyui, settings.output_dir, remote_exec)
 
-    return App(settings=settings, comfyui=comfyui, remote_exec=remote_exec, reasoning=reasoning, director=director, pipeline=pipeline)
+    return App(
+        settings=settings,
+        comfyui=comfyui,
+        remote_exec=remote_exec,
+        reasoning=reasoning,
+        writer=writer,
+        director=director,
+        pipeline=pipeline,
+    )

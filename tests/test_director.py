@@ -6,7 +6,7 @@ import pytest
 
 from src.agents.director import DirectorAgent, DirectorError
 from src.integrations.reasoning_client import MockAgentReasoningClient
-from src.models import CLIP_SECONDS
+from src.models import CLIP_SECONDS, Screenplay, ScreenplayScene
 from src.workflows.wan_prompt_builder import DEFAULT_NEGATIVE_PROMPT
 
 
@@ -72,3 +72,44 @@ def test_plan_episode_raises_if_reply_is_not_an_array_of_strings():
 
     with pytest.raises(DirectorError, match="not a JSON array of strings"):
         director.plan_episode("T", "p", target_seconds=CLIP_SECONDS)
+
+
+def test_plan_episode_from_screenplay_sends_the_numbered_beats_and_keeps_order():
+    screenplay = Screenplay(
+        title="Mars Walk",
+        premise="An astronaut explores Mars.",
+        scenes=[ScreenplayScene(index=0, text="He steps onto the sand."), ScreenplayScene(index=1, text="He finds a glowing device.")],
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[json.dumps(["a boot steps onto red sand", "a glowing device in the sand"])])
+    director = DirectorAgent(reasoning)
+
+    episode = director.plan_episode_from_screenplay(screenplay)
+
+    assert episode.title == "Mars Walk"
+    assert episode.premise == "An astronaut explores Mars."
+    assert [s.positive_prompt for s in episode.scenes] == ["a boot steps onto red sand", "a glowing device in the sand"]
+    system_prompt, user_prompt = reasoning.calls[0]
+    assert "2" in system_prompt
+    assert "1. He steps onto the sand." in user_prompt
+    assert "2. He finds a glowing device." in user_prompt
+
+
+def test_plan_episode_from_screenplay_scene_count_follows_the_screenplay_not_a_fixed_default():
+    screenplay = Screenplay(title="T", premise="p", scenes=[ScreenplayScene(index=0, text="only one beat")])
+    reasoning = MockAgentReasoningClient(scripted_replies=[json.dumps(["one visual shot"])])
+    director = DirectorAgent(reasoning)
+
+    episode = director.plan_episode_from_screenplay(screenplay)
+
+    assert len(episode.scenes) == 1
+
+
+def test_plan_episode_from_screenplay_raises_if_too_few_shots_were_returned():
+    screenplay = Screenplay(
+        title="T", premise="p", scenes=[ScreenplayScene(index=0, text="a"), ScreenplayScene(index=1, text="b")]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[json.dumps(["only one shot"])])
+    director = DirectorAgent(reasoning)
+
+    with pytest.raises(DirectorError, match="needed 2"):
+        director.plan_episode_from_screenplay(screenplay)

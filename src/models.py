@@ -22,6 +22,25 @@ GPU_HOURLY_COST_USD = 0.89
 
 
 @dataclass
+class ScreenplayScene:
+    index: int
+    text: str
+
+
+@dataclass
+class Screenplay:
+    """The Writer Agent's output: a human-readable draft the owner reads
+    and edits directly (ScreenplayScene.text) before anything is ever
+    generated. Nothing downstream runs on a Screenplay until the owner
+    hands the edited version to DirectorAgent.plan_episode_from_screenplay
+    - there is no automatic chaining from Writer to Director."""
+
+    title: str
+    premise: str
+    scenes: list[ScreenplayScene] = field(default_factory=list)
+
+
+@dataclass
 class Scene:
     index: int
     positive_prompt: str
