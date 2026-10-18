@@ -25,6 +25,7 @@ class Settings:
     azure_speech_region: str
     azure_tts_voice: str
     azure_tts_lang: str
+    fal_key: str
     output_dir: str
 
     @property
@@ -55,6 +56,10 @@ class Settings:
     def azure_speech_configured(self) -> bool:
         return bool(self.azure_speech_key and self.azure_speech_region)
 
+    @property
+    def fal_configured(self) -> bool:
+        return bool(self.fal_key)
+
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
@@ -73,5 +78,6 @@ class Settings:
             azure_speech_region=os.environ.get("AZURE_SPEECH_REGION", ""),
             azure_tts_voice=os.environ.get("AZURE_TTS_VOICE", "ar-TN-HediNeural"),
             azure_tts_lang=os.environ.get("AZURE_TTS_LANG", "ar-TN"),
+            fal_key=os.environ.get("FAL_KEY", ""),
             output_dir=os.environ.get("OUTPUT_DIR", "./output"),
         )

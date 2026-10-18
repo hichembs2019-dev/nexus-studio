@@ -6,12 +6,14 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from .agents.dialogue_writer import DialogueWriterAgent
 from .agents.director import DirectorAgent
 from .agents.publisher import PublishingAgent
 from .agents.writer import WriterAgent
 from .bot.conversation import BotConversation
 from .config import Settings
 from .integrations.comfyui_client import ComfyUIClient, MockComfyUIClient, RealComfyUIClient
+from .integrations.fal_video_client import FalVideoClient, MockFalVideoClient, RealFalVideoClient
 from .integrations.publishing_client import MockPublishingClient, PublishingClient, RealYouTubeClient
 from .integrations.reasoning_client import (
     AgentReasoningClient,
@@ -21,6 +23,7 @@ from .integrations.reasoning_client import (
 )
 from .integrations.remote_exec_client import MockRemoteExecClient, RealJupyterRemoteExecClient, RemoteExecClient
 from .integrations.tts_client import MockTTSClient, RealAzureTTSClient, TTSClient
+from .workflows.dialogue_pipeline import DialoguePipeline
 from .workflows.episode_pipeline import EpisodePipeline
 
 logger = logging.getLogger("nexus_studio")
@@ -35,6 +38,9 @@ class App:
     writer: WriterAgent
     director: DirectorAgent
     pipeline: EpisodePipeline
+    fal_video: FalVideoClient | None
+    dialogue_writer: DialogueWriterAgent | None
+    dialogue_pipeline: DialoguePipeline | None
     publisher: PublishingAgent
     conversation: BotConversation
 
@@ -92,6 +98,32 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
         tts=tts, tts_voice=settings.azure_tts_voice, tts_lang=settings.azure_tts_lang,
     )
 
+    # Real character dialogue with lip sync (DialoguePipeline) - the
+    # owner's real ask, replacing the silent-T2V-plus-narration path
+    # above for any new episode. Needs BOTH a real fal.ai key (the
+    # generation itself) and a real Azure TTS key (the audio each clip
+    # lip-syncs to) - a silent "dialogue" line defeats the entire point,
+    # so this stays None rather than falling back to Mock/no-audio like
+    # the old pipeline does.
+    fal_video: FalVideoClient | None
+    dialogue_writer: DialogueWriterAgent | None
+    dialogue_pipeline: DialoguePipeline | None
+    if not force_mocks and settings.fal_configured and settings.azure_speech_configured:
+        fal_video = RealFalVideoClient(settings.fal_key)
+        dialogue_writer = DialogueWriterAgent(reasoning)
+        dialogue_pipeline = DialoguePipeline(
+            fal_video, tts, settings.output_dir, tts_lang=settings.azure_tts_lang,
+        )
+    elif force_mocks:
+        fal_video = MockFalVideoClient()
+        dialogue_writer = DialogueWriterAgent(reasoning)
+        dialogue_pipeline = DialoguePipeline(fal_video, tts or MockTTSClient(), settings.output_dir, tts_lang=settings.azure_tts_lang)
+    else:
+        logger.warning("FAL_KEY and/or AZURE_SPEECH_KEY not set - real dialogue/lip-sync pipeline unavailable")
+        fal_video = None
+        dialogue_writer = None
+        dialogue_pipeline = None
+
     # Only YouTube has a Real client today (see docs/SOURCES.md "Publishing
     # - platforms not yet built" for what every other platform needs first).
     publishing_clients: dict[str, PublishingClient] = {}
@@ -115,6 +147,9 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
         writer=writer,
         director=director,
         pipeline=pipeline,
+        fal_video=fal_video,
+        dialogue_writer=dialogue_writer,
+        dialogue_pipeline=dialogue_pipeline,
         publisher=publisher,
         conversation=conversation,
     )

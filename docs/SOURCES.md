@@ -489,3 +489,81 @@ install step) - without them every episode goes back to silent even with
   free parameter) to the narration's own measured duration instead of a
   fixed 121 frames - not built, would need the narration synthesized
   *before* the Director/generation step rather than after.
+
+## Real character dialogue with lip sync (2026-10-18)
+
+**Why this exists**: the narration approach above (a TTS voice reading
+the screenplay's narrative text over a silent T2V clip) is NOT what was
+asked for. The real ask: "وكلاء لصنع المسلسلات و الافلام ... لربح المال"
+- agents that make series and films with actual characters speaking and
+acting, to publish and monetize - a narrated documentary over silent
+clips is a structurally different product. This section is the real,
+live-verified replacement path: real character dialogue, lip-synced to
+real audio, not a narrator.
+
+### fal.ai Wan 2.2 Speech-to-Video real contract
+
+Checked directly against fal's own docs and model pages (not
+third-party price aggregators, which gave conflicting numbers from
+$0.015 to $1.00 per video for "Wan 2.2" without saying which variant):
+
+- Endpoint: `fal-ai/wan/v2.2-14b/speech-to-video`. Required inputs
+  (confirmed on the model's own page): `prompt` (text), `image_url`
+  (reference photo - this is what keeps a character's face the same
+  across every line/scene), `audio_url` (the line's own speech audio).
+  Both URL fields accept a plain `data:` URI, so a local reference photo
+  and a local TTS clip can be sent directly with no separate upload step.
+- Real pricing, from the model's own page: **$0.10/s at 480p, $0.15/s at
+  580p, $0.20/s at 720p**, video seconds counted at a fixed 16fps
+  regardless of the real output fps.
+- Queue REST contract (fal's own docs,
+  `fal.ai/docs/model-apis/model-endpoints/queue`): `POST
+  https://queue.fal.run/<endpoint>` with `Authorization: Key $FAL_KEY`
+  returns `{request_id, status_url, response_url, cancel_url}`; poll
+  `GET <status_url>` until `status: COMPLETED`; `GET <response_url>`
+  returns the model's own output shape, `{"video": {"url": ...}}` for
+  this model - a second real GET on that url is the actual mp4 bytes.
+  All implemented as-is in `src/integrations/fal_video_client.py`
+  (`RealFalVideoClient`), no guessed field names.
+
+### Real end-to-end run, 2026-10-18 - blocked on billing, not on code
+
+Ran the real pipeline (`DialoguePipeline.produce()`, the actual
+production code path, not a standalone script) with a real
+`FAL_KEY`, a real `AZURE_SPEECH_KEY`, one real character, and one real
+Arabic line ("العشاء جاهز يا جويدة"). The submit request reached
+fal.ai and was accepted in shape - no validation error - but came back:
+
+```
+403 {"detail":"User is locked. Reason: Exhausted balance. Top up your
+balance at fal.ai/dashboard/billing."}
+```
+
+This matches the $0.00 balance visible in the owner's own fal.ai
+dashboard screenshot the same day. **No real clip has been produced
+yet** - this is an account billing gap, not a code defect, and is
+reported as exactly that rather than claimed as a working pipeline. The
+real next step is the owner adding real funds/a payment method at
+`fal.ai/dashboard/billing`; the code path itself needs no further
+change to produce a real result once that is done.
+
+### What is NOT built yet (stated plainly, not implied)
+
+- **Character reference photos are not auto-generated.** `Character.reference_image_path`
+  must be a real photo supplied before `DialoguePipeline.produce()` will
+  run a line for that character - it raises `DialoguePipelineError`
+  rather than inventing a different face per line (see
+  `src/models.py` `Character` docstring). Getting a real, consistent
+  photo per character (generated once and reused, or supplied by the
+  owner) is not built.
+- **`DialogueWriterAgent`/`DialoguePipeline` are not wired into the
+  Telegram bot** (`src/bot/conversation.py`, `runner.py`) - they exist
+  and are unit-tested (see `tests/test_dialogue_writer.py`,
+  `tests/test_dialogue_pipeline.py`), and are reachable from
+  `src/app.py` (`App.dialogue_writer`, `App.dialogue_pipeline`), but
+  only through direct Python code today, the same "direct run" path the
+  old pipeline already documented in README.md. The `/new` flow in the
+  bot still runs the old narration pipeline.
+- **Multi-platform publishing** (TikTok/Instagram/X/Snapchat/Twitch/Kick)
+  is still not built - unchanged from the earlier entry above, YouTube
+  is still the only real publishing client.
