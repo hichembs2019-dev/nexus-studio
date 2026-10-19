@@ -655,6 +655,17 @@ Changed everywhere the dialogue path's real default lives: `character_photos.py`
 
 `AZURE_TTS_LANG` is only a *default* read from the environment - if the deployed droplet's own `.env` already sets `AZURE_TTS_LANG=ar-TN` explicitly, that value wins regardless of this code change, so the real deploy step for this fix includes confirming (or setting) that line on the server, not just redeploying the image.
 
+## A real, correct screenplay - and the next real gap it exposed (2026-10-19)
+
+With all three fixes above redeployed, the owner's next real `/new 60` on the full rewritten (third-person) story produced a screenplay that, checked line by line against the real story: cast no narrator (the real cast was `الزوج`/`الأم`/`الزوجة`/`الأب`/`السائق`/`الأخت` - the actual people in the story), used the real story's own quoted wording almost verbatim line for line, correctly attributed lines to the right speaker (a real earlier mix-up - the wife's lines misattributed - did not recur), and its own last line was the real story's actual last line (the mother's death). All three fixes held up on a real run.
+
+**Real next finding** ("انا كتبت قصة و هو يبترها" - I wrote a story and it cuts it): nothing was truncated in transit this time, but the 15 real lines a 60-second video allows were not enough room for every real quoted moment the story contains, and the model's choice of which 15 to keep was not reliably the right 15 - it skipped the single quoted line the whole plot depends on (the mother's lie that is the real reason the marriage ended: «زوجتك شتمتك وسبتك في غيابك») while keeping lines from elsewhere. This is a duration-vs-content tradeoff, not a bug the code alone can fully solve - a 1000+ word real story has more real quoted moments than 15 lines can hold. Two real responses:
+
+1. `_LINES_SYSTEM_PROMPT` now explicitly instructs that when there are more real quoted moments than `{line_count}` allows, the ones to keep are the ones the story's actual events depend on - what starts the conflict, each real turning point, how it ends - never dropping the line that explains WHY something central happens in favor of a less essential one. Covered by `tests/test_dialogue_writer.py::test_write_dialogue_screenplay_lines_prompt_prioritizes_essential_quoted_moments`, mutation-tested the same way as the fixes above.
+2. The owner's own real answer to not having enough room: raise the duration. 120 seconds ≈ 30 lines, close to or covering every real quoted moment in this particular story, at a real estimated cost roughly double 60 seconds' (`ESTIMATED_SECONDS_PER_LINE` × `PRICE_PER_SECOND_USD` in `_format_screenplay`'s own estimate line - shown to the owner before approving, same as every other duration).
+
+Same caveat as the fixes above: the prompt change is confirmed to reach the model; whether the model reliably picks the right lines on a real run with a real quote-dense story is the owner's next real test to make, not something proven here.
+
 ### What is NOT built yet (stated plainly, not implied)
 
 - **Multi-platform publishing** (TikTok/Instagram/X/Snapchat/Twitch/Kick)

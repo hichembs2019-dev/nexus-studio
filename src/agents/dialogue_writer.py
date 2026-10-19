@@ -54,6 +54,24 @@ never "الراوي"/"narrator") who appears in scenes and speaks real,
 in-the-moment dialogue - prioritizing exactly the quoted lines the
 fix above already requires reusing verbatim - never a line that
 summarizes, recounts, or narrates events in past tense.
+
+Third real finding, same story, same day ("انا كتبت قصة و هو يبترها" -
+I wrote a story and it [the bot] cuts it): the SAME real 60-second
+screenplay, checked line by line against the real story, DID cover the
+full arc end to end (its last line was the story's real last line, the
+mother's death) - nothing was truncated in transit this time. But the
+15 lines it picked skipped the single most important quoted line in the
+whole story: the mother's lie that is the real reason the marriage
+ended («زوجتك شتمتك وسبتك في غيابك» - "your wife insulted and cursed
+you behind your back"), and a couple of other structurally important
+quoted moments, in favor of lines from elsewhere. With more real quoted
+moments in the premise than there was room for, the model picked
+somewhat arbitrarily rather than keeping the ones the plot actually
+turns on. `_LINES_SYSTEM_PROMPT` now explicitly says so: when there are
+more real quoted moments than {line_count} allows, keep the ones the
+story's events actually depend on (what starts the conflict, each real
+turning point, how it ends) over ones that are merely additional or
+repeat a point already made.
 """
 from __future__ import annotations
 
@@ -88,7 +106,8 @@ Rules:
 - The lines must flow as one continuous scene in order, matching the premise, with characters actually responding to each other.
 - The premise is the real source of truth, not a loose inspiration: if it already contains a character's actual words (quoted directly, e.g. in "quotes" or «guillemets»), use that EXACT wording for their line - do not paraphrase or invent a different line for a moment the premise already gives you.
 - Never give a character a line the premise explicitly says they did NOT say, or have them respond where the premise explicitly says they stayed silent or did not answer - invent dialogue only to fill genuine gaps the premise leaves open, never to contradict what it states.
-- NEVER write a "narrator" line that summarizes, recounts, or describes past events in past tense (e.g. "So I divorced her and stopped listening to her") - every single line must be something a character says TO another character, in the moment, inside a real scene. If the premise is first-person memoir prose, DRAMATIZE it: pick the real scenes it already describes with quoted dialogue, and have the real people in them speak directly to each other there - do not have the narrator summarize what happened between those scenes."""
+- NEVER write a "narrator" line that summarizes, recounts, or describes past events in past tense (e.g. "So I divorced her and stopped listening to her") - every single line must be something a character says TO another character, in the moment, inside a real scene. If the premise is first-person memoir prose, DRAMATIZE it: pick the real scenes it already describes with quoted dialogue, and have the real people in them speak directly to each other there - do not have the narrator summarize what happened between those scenes.
+- If the premise contains more real quoted moments than {line_count} lines can hold, you MUST choose which ones to keep - and the choice is not arbitrary: keep the lines the story's actual events depend on (what starts the conflict, each real turning point, how it ends) over lines that are merely additional detail or repeat a point another kept line already makes. Dropping the line that explains WHY something central happens (why a divorce, a decision, an estrangement) in favor of two lines from a less essential moment is wrong even if the total count is still correct."""
 
 
 class DialogueWriterError(Exception):

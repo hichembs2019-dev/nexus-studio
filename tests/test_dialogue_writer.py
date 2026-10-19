@@ -82,6 +82,27 @@ def test_write_dialogue_screenplay_prompts_forbid_a_narrator_role():
     assert "DRAMATIZE" in lines_system_prompt
 
 
+def test_write_dialogue_screenplay_lines_prompt_prioritizes_essential_quoted_moments():
+    # Real finding, 2026-10-19 ("انا كتبت قصة و هو يبترها" - I wrote a
+    # story and it cuts it): a real 60s/15-line screenplay covered the
+    # story's full arc (its last line was the real story's last line)
+    # but skipped the single quoted line the whole plot turns on - the
+    # mother's lie that caused the divorce - in favor of lines from
+    # elsewhere, because the premise had more real quoted moments than
+    # line_count allowed and the prompt gave no guidance on which to
+    # keep.
+    cast_reply = _cast_reply(("فوزية", "female", "middle"))
+    lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+    lines_system_prompt = reasoning.calls[1][0]
+    assert "turning point" in lines_system_prompt
+    assert "WHY something central happens" in lines_system_prompt
+
+
 def test_write_dialogue_screenplay_assigns_different_photos_by_gender_and_age():
     cast_reply = _cast_reply(("Tom", "male", "older"), ("Amy", "female", "young"))
     lines_reply = json.dumps(
