@@ -23,6 +23,20 @@ Owner's instruction, 2026-10-19 ("بل اطلب من البوت مثلما كا�
 - the produce() call here is the one real-money moment (fal.ai speech-
 to-video spend), gated behind the SAME approve button the old pipeline
 used, never called on its own.
+
+Real bug found live, 2026-10-19 ("لماذا كل هذا ... ألم اقل لك بدون
+تخمين و لا افتراضيات؟"): the owner pressed Approve and `produce()`
+raised immediately (a real Docker-image bug, fixed the same commit in
+`Dockerfile`) - but `_produce_and_notify` had no error handling at all,
+so `asyncio.create_task(...)`'s exception just died as "Task exception
+was never retrieved" in the container's own logs, completely invisible
+from Telegram. The owner waited over two hours for a reply that could
+never have come - no crash, no error message, nothing. `_produce_and_notify`
+now catches any real exception from `produce()` and sends it to the
+owner as an actual Telegram message instead of only the container logs -
+this is the one place in the whole bot where a failure must reach the
+owner's phone directly, since it is the one call nothing else here
+retries or falls back from.
 """
 from __future__ import annotations
 
@@ -52,7 +66,14 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
 
     async def _produce_and_notify(chat_id: str, screenplay, context: ContextTypes.DEFAULT_TYPE) -> None:
         loop = asyncio.get_running_loop()
-        produced = await loop.run_in_executor(None, dialogue_pipeline.produce, screenplay)
+        try:
+            produced = await loop.run_in_executor(None, dialogue_pipeline.produce, screenplay)
+        except Exception as exc:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"❌ فشل التوليد الحقيقي: {exc}\n\nلم يكتمل أي مقطع - تحقق من رصيد fal.ai الحقيقي قبل إعادة المحاولة.",
+            )
+            return
         reply = conversation.format_produced(chat_id, produced)
         await _send_reply(chat_id, context, reply)
 

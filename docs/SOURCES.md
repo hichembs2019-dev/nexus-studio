@@ -676,6 +676,23 @@ Covered by `tests/test_dialogue_writer.py::test_write_complete_dialogue_screenpl
 
 Same caveat as every prompt-level fix above: proven to reach the model and to enforce the right COUNT; whether the model's own copy of each quoted line is byte-for-byte verbatim on a real run is the owner's next real test, same as always.
 
+## The first real Approve press, and two real bugs it found (2026-10-19)
+
+The owner pressed "✅ موافقة" on a real 22-line `/full` screenplay at 19:46. Nothing came back - not a video, not an error - for over two hours. Diagnosed from the real container logs (`docker compose logs`, filtered past the constant Telegram long-polling noise) and the real fal.ai dashboard (Credits still exactly **$10.00**, unmoved - the decisive clue that this failed before spending anything, not that it was slow):
+
+```
+ERROR:asyncio:Task exception was never retrieved
+...DialoguePipelineError: Character 'الأم' reference_image_path
+'/app/assets/placeholder_characters/female_older.png' does not exist on disk
+```
+
+Two real, separate bugs, found together:
+
+1. **The Docker image never contained the placeholder character images.** `Dockerfile` had `COPY src ./src` and nothing for `assets/` - every unit test exercising `character_photos.py` runs directly against the real filesystem paths on disk, so this gap was invisible to the whole test suite; only a real container, built from the real image, could have caught it. Fixed: `COPY assets ./assets` added to `Dockerfile`.
+2. **A failure in the one real-money step was invisible from Telegram.** `_produce_and_notify` (`src/bot/runner.py`) had no error handling around `dialogue_pipeline.produce()`; `asyncio.create_task(...)`'s exception just died as "Task exception was never retrieved" in the container's own logs - the owner's phone got nothing at all, not even an error, which is why over two hours passed with no visible outcome in either direction. Fixed: the executor call is now wrapped in try/except, and any real exception is sent to the owner as an actual Telegram message (`❌ فشل التوليد الحقيقي: ...`) - this is the one call in the whole bot that must reach the owner directly on failure, since nothing else here retries or falls back from it.
+
+Both real, confirmed by the real traceback above, not guessed - this project's own standing rule. Not independently proven by a redeploy yet; that is the real next step, with the explicit instruction to verify `assets/placeholder_characters/` actually exists inside the rebuilt container **before** pressing Approve again, so a second real mistake does not cost another two hours of silence.
+
 ### What is NOT built yet (stated plainly, not implied)
 
 - **Multi-platform publishing** (TikTok/Instagram/X/Snapchat/Twitch/Kick)

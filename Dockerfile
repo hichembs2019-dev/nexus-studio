@@ -11,6 +11,15 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src ./src
+# Real bug found live, 2026-10-19: the image build never copied this
+# directory, so every real Character.reference_image_path
+# (character_photos.py) pointed at a file that did not exist inside the
+# running container - DialoguePipeline raised DialoguePipelineError on
+# the very first line of the very first real production run, and that
+# exception was never surfaced to the owner (see runner.py's own fix,
+# same commit) - they waited over two hours for a reply that could
+# never have come.
+COPY assets ./assets
 
 ENV OUTPUT_DIR=/data/output
 VOLUME ["/data"]
