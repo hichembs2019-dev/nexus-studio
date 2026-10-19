@@ -183,18 +183,28 @@ class BotConversation:
 
     def format_produced(self, chat_id: str, produced: ProducedDialogueEpisode) -> BotReply:
         self._states.setdefault(chat_id, _ChatState()).produced = produced
+        failed_note = self._format_failed_lines(produced) if produced.failed_lines else ""
         if produced.stitched_path is None:
             return BotReply(
                 text=(
                     f"تم توليد {len(produced.clips)} مقطع لكن تعذّر دمجها. "
-                    f"التكلفة الحقيقية حتى الآن: ${produced.total_cost_usd:.3f}"
+                    f"التكلفة الحقيقية حتى الآن: ${produced.total_cost_usd:.3f}{failed_note}"
                 )
             )
         return BotReply(
-            text=f"✅ تم. {len(produced.clips)} مقطع حوار، التكلفة الحقيقية ${produced.total_cost_usd:.3f}.",
+            text=f"✅ تم. {len(produced.clips)} مقطع حوار، التكلفة الحقيقية ${produced.total_cost_usd:.3f}.{failed_note}",
             video_path=produced.stitched_path,
             buttons=[("📤 نشر على YouTube", "publish:youtube"), ("🗑️ تجاهل", "discard")],
         )
+
+    @staticmethod
+    def _format_failed_lines(produced: ProducedDialogueEpisode) -> str:
+        # Real finding, 2026-10-19: a real line timing out on fal.ai used
+        # to discard every clip already paid for; now the ones that
+        # failed are reported by number so the owner knows exactly which
+        # real money bought nothing and which lines to retry with /edit.
+        lines = ", ".join(str(l.index + 1) for l, _ in produced.failed_lines)
+        return f"\n\n⚠️ فشلت {len(produced.failed_lines)} أسطر ولم تُحتسب تكلفتها (الأرقام: {lines}) - يمكنك تعديلها وإعادة المحاولة."
 
     def handle_publish(self, chat_id: str, platform: str) -> BotReply:
         state = self._states.get(chat_id)

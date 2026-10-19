@@ -220,6 +220,25 @@ def test_format_produced_without_a_stitched_path_reports_cost_without_buttons():
     assert "تعذّر دمجها" in reply.text
 
 
+def test_format_produced_reports_failed_lines_by_number():
+    # Real finding, 2026-10-19: a real line timing out on fal.ai used to
+    # silently discard every clip already paid for and never told the
+    # owner which real money bought nothing.
+    conversation, _ = _conversation([])
+    screenplay = DialogueScreenplay(title="T", premise="p", characters=[], lines=[])
+    clip = ProducedDialogueClip(line=DialogueLine(index=0, character="X", line="hi"), local_path="/tmp/c0.mp4", cost_usd=0.4)
+    failed_line = DialogueLine(index=1, character="X", line="bye")
+    produced = ProducedDialogueEpisode(
+        screenplay=screenplay, clips=[clip], stitched_path="/tmp/out.mp4",
+        failed_lines=[(failed_line, "fal.ai job did not complete within 600s")],
+    )
+
+    reply = conversation.format_produced("chat1", produced)
+
+    assert "فشلت 1" in reply.text
+    assert "2" in reply.text  # 1-indexed line number shown to the owner, not the 0-indexed .index
+
+
 def test_publish_youtube_success_reports_the_real_url():
     conversation, youtube = _conversation([], youtube_video_ids=["abc123"])
     screenplay = DialogueScreenplay(title="T", premise="p", characters=[], lines=[])

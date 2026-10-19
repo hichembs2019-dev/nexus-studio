@@ -137,6 +137,16 @@ class ProducedDialogueEpisode:
     screenplay: DialogueScreenplay
     clips: list[ProducedDialogueClip]
     stitched_path: str | None
+    # Real finding, 2026-10-19: a real 22-line run paid for and
+    # successfully generated ~15 real clips (fal.ai's own dashboard:
+    # "Errors in the last 7 days: 0"), then one line's job ran past the
+    # client's own 600s wait - and DialoguePipeline.produce() used to
+    # raise and discard the whole episode right there, throwing away
+    # every clip already paid for. Now it keeps going: each (line, real
+    # error message) that failed lands here instead of aborting
+    # everything, so the owner gets back whatever real money actually
+    # bought, not nothing.
+    failed_lines: list[tuple[DialogueLine, str]] = field(default_factory=list)
 
     @property
     def total_cost_usd(self) -> float:

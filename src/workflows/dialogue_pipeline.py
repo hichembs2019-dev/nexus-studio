@@ -83,6 +83,7 @@ class DialoguePipeline:
         characters_by_name = {c.name: c for c in screenplay.characters}
 
         clips: list[ProducedDialogueClip] = []
+        failed_lines: list[tuple] = []
         for line in screenplay.lines:
             character = characters_by_name.get(line.character)
             if character is None:
@@ -100,31 +101,45 @@ class DialoguePipeline:
                     f"{character.reference_image_path!r} does not exist on disk"
                 )
 
-            prefix = f"{slug}_line{line.index:03d}"
-            audio_bytes = self._tts.synthesize(line.line, character.voice, lang=self._tts_lang)
-            audio_path = os.path.join(self._output_dir, f"{prefix}.mp3")
-            with open(audio_path, "wb") as f:
-                f.write(audio_bytes)
+            # Real finding, 2026-10-19: a real 22-line run paid for and
+            # successfully generated ~15 real clips (fal.ai's own
+            # dashboard confirmed zero errors on its side), then one
+            # line's real job ran past the client's own 600s wait - and
+            # this used to let that exception propagate straight out of
+            # produce(), discarding every clip already paid for and
+            # already sitting finished on disk. Only the real,
+            # money-spending network calls are caught here - a bad
+            # screenplay (checks above) still stops everything, because
+            # continuing would just repeat the same structural error.
+            try:
+                prefix = f"{slug}_line{line.index:03d}"
+                audio_bytes = self._tts.synthesize(line.line, character.voice, lang=self._tts_lang)
+                audio_path = os.path.join(self._output_dir, f"{prefix}.mp3")
+                with open(audio_path, "wb") as f:
+                    f.write(audio_bytes)
 
-            image_data_uri = _data_uri(character.reference_image_path)
-            audio_data_uri = _bytes_data_uri(audio_bytes, "audio/mpeg")
+                image_data_uri = _data_uri(character.reference_image_path)
+                audio_data_uri = _bytes_data_uri(audio_bytes, "audio/mpeg")
 
-            clip_bytes = self._fal_video.generate_speech_to_video(
-                prompt=(line.action or f"{character.name} speaking") + CINEMATIC_STYLE_SUFFIX,
-                image_data_uri=image_data_uri,
-                audio_data_uri=audio_data_uri,
-                resolution=self._resolution,
-            )
-            clip_path = os.path.join(self._output_dir, f"{prefix}.mp4")
-            with open(clip_path, "wb") as f:
-                f.write(clip_bytes)
+                clip_bytes = self._fal_video.generate_speech_to_video(
+                    prompt=(line.action or f"{character.name} speaking") + CINEMATIC_STYLE_SUFFIX,
+                    image_data_uri=image_data_uri,
+                    audio_data_uri=audio_data_uri,
+                    resolution=self._resolution,
+                )
+                clip_path = os.path.join(self._output_dir, f"{prefix}.mp4")
+                with open(clip_path, "wb") as f:
+                    f.write(clip_bytes)
 
-            duration = _ffprobe_duration(clip_path)
-            cost = duration * PRICE_PER_SECOND_USD[self._resolution]
-            clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
+                duration = _ffprobe_duration(clip_path)
+                cost = duration * PRICE_PER_SECOND_USD[self._resolution]
+                clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
+            except Exception as exc:
+                failed_lines.append((line, str(exc)))
+                continue
 
         stitched_path = self._stitch(clips, slug) if len(clips) > 1 else (clips[0].local_path if clips else None)
-        return ProducedDialogueEpisode(screenplay=screenplay, clips=clips, stitched_path=stitched_path)
+        return ProducedDialogueEpisode(screenplay=screenplay, clips=clips, stitched_path=stitched_path, failed_lines=failed_lines)
 
     def _stitch(self, clips: list[ProducedDialogueClip], slug: str) -> str:
         list_path = os.path.join(self._output_dir, f"{slug}_dialogue_concat_list.txt")

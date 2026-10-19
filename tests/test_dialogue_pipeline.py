@@ -129,3 +129,44 @@ def test_produce_rejects_a_line_whose_speaker_is_not_in_the_cast(tmp_path):
 
     with pytest.raises(DialoguePipelineError, match="not in the cast"):
         pipeline.produce(screenplay)
+
+
+def test_produce_keeps_already_paid_for_clips_when_a_later_line_fails(tmp_path):
+    # Real finding, 2026-10-19: a real 22-line run paid for and
+    # successfully generated ~15 real clips (fal.ai's own dashboard
+    # confirmed zero errors on its side), then one line's real job ran
+    # past the client's own 600s wait - and produce() used to let that
+    # exception propagate straight out, discarding every clip already
+    # paid for and already sitting finished on disk. A test that only
+    # checks "produce() raises on a fal.ai failure" would still pass
+    # with that defect in place - it has to check the earlier real
+    # clips survive.
+    ref_path = str(tmp_path / "ref.jpg")
+    _ref_image(ref_path)
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes, fail_at_calls=frozenset({1}))
+    tts = MockTTSClient()
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path))
+    screenplay = DialogueScreenplay(
+        title="T",
+        premise="p",
+        characters=[Character(name="A", reference_image_path=ref_path)],
+        lines=[
+            DialogueLine(index=0, character="A", line="one", action="a1"),
+            DialogueLine(index=1, character="A", line="two", action="a2"),
+            DialogueLine(index=2, character="A", line="three", action="a3"),
+        ],
+    )
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(produced.clips) == 2  # line 0 and line 2 succeeded
+    assert [c.line.index for c in produced.clips] == [0, 2]
+    assert len(produced.failed_lines) == 1
+    failed_line, error_message = produced.failed_lines[0]
+    assert failed_line.index == 1
+    assert "mock failure at call 1" in error_message
+    # the real money already spent on the surviving clips must still be
+    # reported, not thrown away along with the failed one
+    assert produced.total_cost_usd == pytest.approx(2 * 1.0 * 0.10)

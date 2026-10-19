@@ -708,6 +708,21 @@ This is the first real run to ever get past `RealFalVideoClient`'s submit step -
 
 **The 422's actual cause is still unknown** and will only be known from the real message the owner's next real attempt now surfaces directly in Telegram - stated plainly rather than guessed at (a malformed `image_url`/`audio_url` data URI, a fal.ai-side validation rule not documented on the model's public page, or something else entirely are all equally unconfirmed possibilities until that real text is read).
 
+**With that diagnostic fix deployed, the real next attempt surfaced a different, worse real problem.** The owner's real fal.ai dashboard after that attempt: `Credits: $3.26` (down from a real $10.00 - **$6.74 actually spent**), and the dashboard's own numbers for `fal-ai/wan/v2.2-14b/speech-to-video` specifically: **15 real requests, 0 errors** in the last 7 days. fal.ai's own side reports every one of those requests succeeded. The Telegram message the owner got, though:
+
+```
+❌ فشل التوليد الحقيقي: fal.ai job did not complete within 600s
+(request_id=01a15617-d76a-7c33-87ed-d1c13cb81242)
+```
+
+**Real root cause, found without guessing**: `DialoguePipeline.produce()` built its `clips` list across a `for` loop with no error handling inside it. The 22-line run got through roughly 15 real, successfully-paid-for lines, then one line's real fal.ai job ran past `RealFalVideoClient`'s own 600-second wait - and that one `FalVideoError` propagated straight out of `produce()`, which discarded the entire `clips` list (along with the function call itself) before ever returning anything. Every one of those ~15 real, already-paid-for, already-finished-on-disk clips was thrown away by the code, not by fal.ai - this is the real reason the owner's money felt wasted, even though fal.ai's own records show nothing was wasted on their end.
+
+Fixed: the per-line TTS + fal.ai + ffprobe block inside `produce()`'s loop is now wrapped in its own `try/except`. A failure there is recorded as `(line, str(exc))` in a new `failed_lines` list on `ProducedDialogueEpisode` (`src/models.py`) and the loop continues to the next line, instead of aborting everything. The structural validation checks above it (unknown speaker, missing/absent reference photo) still raise immediately and stop the whole episode - deliberately: those happen before any money is spent for that line and indicate a broken screenplay, where continuing would just repeat the identical failure on every remaining line by the same character.
+
+`BotConversation.format_produced()` now reports any `failed_lines` by their 1-indexed line number in the message the owner actually reads, so they know exactly which real money bought nothing and can `/edit` + retry just those lines rather than redoing (and re-paying for) the whole episode. `MockFalVideoClient` gained `fail_at_calls` so this is testable without a real fal.ai account: `tests/test_dialogue_pipeline.py::test_produce_keeps_already_paid_for_clips_when_a_later_line_fails` and `tests/test_bot_conversation.py::test_format_produced_reports_failed_lines_by_number`, both mutation-tested (reverted all three changed files, confirmed both fail - one on a propagated `FalVideoError`, one on `TypeError: unexpected keyword argument 'failed_lines'` - restored, confirmed green).
+
+Not yet proven on a real run with this fix deployed - same standard as every fix above.
+
 ### What is NOT built yet (stated plainly, not implied)
 
 - **Multi-platform publishing** (TikTok/Instagram/X/Snapchat/Twitch/Kick)

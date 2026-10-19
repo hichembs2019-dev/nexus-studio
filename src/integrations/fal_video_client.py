@@ -115,16 +115,26 @@ class RealFalVideoClient(FalVideoClient):
 
 class MockFalVideoClient(FalVideoClient):
     """Scripted mp4 bytes, records every call - lets a test drive the
-    whole dialogue pipeline without spending real fal.ai money."""
+    whole dialogue pipeline without spending real fal.ai money.
 
-    def __init__(self, scripted_bytes: bytes = b"fake-s2v-mp4-bytes"):
+    `fail_at_calls` lets a test simulate the real 2026-10-19 incident (a
+    real line timing out partway through a real multi-line run, after
+    several earlier real clips already succeeded) - a 0-indexed call
+    number in that set raises FalVideoError instead of returning bytes,
+    without needing a real fal.ai account to reproduce it."""
+
+    def __init__(self, scripted_bytes: bytes = b"fake-s2v-mp4-bytes", fail_at_calls: frozenset[int] = frozenset()):
         self._scripted_bytes = scripted_bytes
+        self._fail_at_calls = fail_at_calls
         self.calls: list[dict] = []
 
     def generate_speech_to_video(
         self, *, prompt: str, image_data_uri: str, audio_data_uri: str, resolution: str = "480p"
     ) -> bytes:
+        call_index = len(self.calls)
         self.calls.append(
             {"prompt": prompt, "image_data_uri": image_data_uri, "audio_data_uri": audio_data_uri, "resolution": resolution}
         )
+        if call_index in self._fail_at_calls:
+            raise FalVideoError(f"mock failure at call {call_index}")
         return self._scripted_bytes
