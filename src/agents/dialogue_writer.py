@@ -36,6 +36,24 @@ room to invent freely even when the premise already supplied the real
 words. It now explicitly requires reusing a premise's own quoted
 dialogue verbatim where one exists, and forbids inventing a line a
 character is explicitly described as NOT saying.
+
+Second real finding, same story, same day ("اريد ممثلين يتكلمون لا راوي
+يروي قصة" - I want actors talking, not a narrator telling a story): the
+very bug this whole agent exists to fix (see the module docstring above)
+came back through a side door. The premise is written as first-person
+past-tense memoir prose ("كنت مطلقاً لزوجتي..."), so the cast step cast
+the narrating "I" as a character literally named "الراوي" (The
+Narrator), and the lines step then gave that character lines like
+"فصرت أطلقها ولا أستمع لكلامها" (So I divorced her and stopped
+listening to her) - a plain narrated summary of past events, not a line
+anyone says to anyone in a scene. Both prompts now explicitly forbid a
+"narrator" role: the real first-person narrator of a memoir-style
+premise must be cast as an actual character (by name if the premise
+gives one, otherwise by their real role - "الزوج"/"the husband" here,
+never "الراوي"/"narrator") who appears in scenes and speaks real,
+in-the-moment dialogue - prioritizing exactly the quoted lines the
+fix above already requires reusing verbatim - never a line that
+summarizes, recounts, or narrates events in past tense.
 """
 from __future__ import annotations
 
@@ -55,6 +73,7 @@ Rules:
   - "gender": "male" or "female" - your best real inference from how the premise describes or refers to them.
   - "age_group": "young" (child/teen/20s), "middle" (30s-50s), or "older" (60+) - your best real inference.
 - Only characters who actually SPEAK a line - no narrators, no silent background characters.
+- NEVER create a character named/role "narrator", "راوي", "الراوي" or similar. If the premise is written as first-person memoir/narrative prose (e.g. "كنت..."/"I was..."), the person telling it is a REAL character who appears in the scenes and speaks real dialogue - cast them by their actual name if the premise gives one, otherwise by their real role in the story (e.g. "الزوج"/"the husband", "الأب"/"the father") - never as "narrator".
 - 2 to 6 characters, names in the SAME language/script as the premise."""
 
 _LINES_SYSTEM_PROMPT = """You are a screenwriter turning a premise and a fixed cast into a real scripted scene - actual dialogue, not narration.
@@ -68,7 +87,8 @@ Rules:
   - "action": a short, visual-only English stage direction for this moment (facial expression, gesture, what they're doing) - NEVER repeat or translate the spoken line itself here, the video model lip-syncs the real audio and would render duplicated text as more speech.
 - The lines must flow as one continuous scene in order, matching the premise, with characters actually responding to each other.
 - The premise is the real source of truth, not a loose inspiration: if it already contains a character's actual words (quoted directly, e.g. in "quotes" or «guillemets»), use that EXACT wording for their line - do not paraphrase or invent a different line for a moment the premise already gives you.
-- Never give a character a line the premise explicitly says they did NOT say, or have them respond where the premise explicitly says they stayed silent or did not answer - invent dialogue only to fill genuine gaps the premise leaves open, never to contradict what it states."""
+- Never give a character a line the premise explicitly says they did NOT say, or have them respond where the premise explicitly says they stayed silent or did not answer - invent dialogue only to fill genuine gaps the premise leaves open, never to contradict what it states.
+- NEVER write a "narrator" line that summarizes, recounts, or describes past events in past tense (e.g. "So I divorced her and stopped listening to her") - every single line must be something a character says TO another character, in the moment, inside a real scene. If the premise is first-person memoir prose, DRAMATIZE it: pick the real scenes it already describes with quoted dialogue, and have the real people in them speak directly to each other there - do not have the narrator summarize what happened between those scenes."""
 
 
 class DialogueWriterError(Exception):

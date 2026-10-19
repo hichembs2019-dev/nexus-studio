@@ -62,6 +62,26 @@ def test_write_dialogue_screenplay_lines_prompt_requires_verbatim_quotes_and_for
     assert "did NOT say" in lines_system_prompt
 
 
+def test_write_dialogue_screenplay_prompts_forbid_a_narrator_role():
+    # Real finding, 2026-10-19 ("اريد ممثلين يتكلمون لا راوي يروي قصة" -
+    # I want actors talking, not a narrator telling a story): a
+    # first-person memoir-style premise got its own narrating "I" cast
+    # as a character literally named "الراوي" (The Narrator), who was
+    # then given lines that summarize past events instead of real
+    # in-scene dialogue - the exact documentary-narration failure this
+    # whole agent exists to prevent, reappearing through the cast step.
+    cast_reply = _cast_reply(("فوزية", "female", "middle"))
+    lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+    cast_system_prompt, lines_system_prompt = reasoning.calls[0][0], reasoning.calls[1][0]
+    assert "راوي" in cast_system_prompt and "narrator" in cast_system_prompt.lower()
+    assert "DRAMATIZE" in lines_system_prompt
+
+
 def test_write_dialogue_screenplay_assigns_different_photos_by_gender_and_age():
     cast_reply = _cast_reply(("Tom", "male", "older"), ("Amy", "female", "young"))
     lines_reply = json.dumps(
