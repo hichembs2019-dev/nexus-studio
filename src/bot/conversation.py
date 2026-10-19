@@ -1,24 +1,47 @@
 """The Telegram bot's actual decision logic, kept entirely synchronous and
 free of the telegram library itself - testable with Mock agents and no
 live bot. The thin async wiring that turns real Telegram updates into
-calls on this class (and runs the slow EpisodePipeline.produce() call in
+calls on this class (and runs the slow DialoguePipeline.produce() call in
 a background thread so the bot stays responsive) lives in
 src/bot/runner.py, the same "thinnest possible wrapper, not unit tested"
 split nexus-commerce's own telegram_listener.py documents and uses.
 
 One chat (the owner's) is assumed to work on one draft at a time - no
 concurrency within a chat_id.
+
+Owner's instruction, 2026-10-19 ("بل اطلب من البوت مثلما كان يفعل يرسل
+لي السيناريو و يسالني الموافقة" - have the bot do what it used to: send
+me the screenplay and ask for approval): this is the dialogue-pipeline
+rewrite of what the EpisodePipeline/WriterAgent/DirectorAgent version of
+this file did - same approve/cancel human gate before anything real
+generates, now driving DialogueWriterAgent + DialoguePipeline (real
+character dialogue with lip sync) instead of the old silent-T2V-plus-
+narration pipeline, which the live bot was still running right up to
+this change despite nothing ever having called it live (confirmed: a
+real story sent to the bot got no reply at all, because nothing is
+deployed to run either pipeline anywhere yet - see README's deployment
+section).
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-from src.agents.director import DirectorAgent
+from src.agents.dialogue_writer import DialogueWriterAgent
 from src.agents.publisher import PublishingAgent
-from src.agents.writer import WriterAgent
-from src.models import Episode, ProducedEpisode, Screenplay
+from src.integrations.fal_video_client import PRICE_PER_SECOND_USD
+from src.models import DialogueScreenplay, ProducedDialogueEpisode
 
 DEFAULT_TARGET_SECONDS = 30.0
+
+# A real line's spoken length depends on how much text the writer puts in
+# it (DialoguePipeline's own docstring: clip length is NOT fixed, it is
+# however long that line's TTS audio runs) - this is this project's own
+# documented, stated ESTIMATE for turning a target duration into a line
+# count before anything is written, not a guaranteed real duration. The
+# real total cost is only known after real generation (format_produced
+# reports it) - this estimate exists only so /new <seconds> <idea> can
+# pick a reasonable line_count up front.
+ESTIMATED_SECONDS_PER_LINE = 4.0
 
 
 @dataclass
@@ -30,15 +53,13 @@ class BotReply:
 
 @dataclass
 class _ChatState:
-    screenplay: Screenplay | None = None
-    episode: Episode | None = None
-    produced: ProducedEpisode | None = None
+    screenplay: DialogueScreenplay | None = None
+    produced: ProducedDialogueEpisode | None = None
 
 
 class BotConversation:
-    def __init__(self, writer: WriterAgent, director: DirectorAgent, publisher: PublishingAgent):
-        self._writer = writer
-        self._director = director
+    def __init__(self, dialogue_writer: DialogueWriterAgent, publisher: PublishingAgent):
+        self._dialogue_writer = dialogue_writer
         self._publisher = publisher
         self._states: dict[str, _ChatState] = {}
 
@@ -58,7 +79,8 @@ class BotConversation:
             return BotReply(text="أعطني فكرة بعد عدد الثواني، مثلاً: /new 30 رائد فضاء وحيد يجد إشارة على المريخ.")
 
         title = premise[:50]
-        screenplay = self._writer.write_screenplay(title, premise, target_seconds)
+        line_count = max(2, round(target_seconds / ESTIMATED_SECONDS_PER_LINE))
+        screenplay = self._dialogue_writer.write_dialogue_screenplay(title, premise, line_count)
         self._states[chat_id] = _ChatState(screenplay=screenplay)
         return BotReply(text=self._format_screenplay(screenplay), buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
 
@@ -69,43 +91,46 @@ class BotConversation:
 
         parts = args_text.strip().split(maxsplit=1)
         if len(parts) != 2 or not parts[0].isdigit():
-            return BotReply(text="الاستخدام: /edit <رقم المشهد> <النص الجديد>")
+            return BotReply(text="الاستخدام: /edit <رقم السطر> <الحوار الجديد>")
 
-        scene_number = int(parts[0])
+        line_number = int(parts[0])
         new_text = parts[1]
-        matching = [s for s in state.screenplay.scenes if s.index == scene_number - 1]
+        matching = [l for l in state.screenplay.lines if l.index == line_number - 1]
         if not matching:
-            return BotReply(text=f"لا يوجد مشهد رقم {scene_number} في المسودة الحالية (تحتوي على {len(state.screenplay.scenes)} مشهداً).")
+            return BotReply(text=f"لا يوجد سطر رقم {line_number} في المسودة الحالية (تحتوي على {len(state.screenplay.lines)} سطراً).")
 
-        matching[0].text = new_text
+        matching[0].line = new_text
         return BotReply(text=self._format_screenplay(state.screenplay), buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
 
     def handle_cancel(self, chat_id: str) -> BotReply:
         self._states[chat_id] = _ChatState()
         return BotReply(text="تم إلغاء المسودة.")
 
-    def handle_approve(self, chat_id: str) -> tuple[BotReply, Episode | None, list[str] | None]:
+    def handle_approve(self, chat_id: str) -> tuple[BotReply, DialogueScreenplay | None]:
         state = self._states.get(chat_id)
         if state is None or state.screenplay is None:
-            return BotReply(text="لا توجد مسودة سيناريو للموافقة عليها - ابدأ بـ /new."), None, None
+            return BotReply(text="لا توجد مسودة سيناريو للموافقة عليها - ابدأ بـ /new."), None
 
-        episode = self._director.plan_episode_from_screenplay(state.screenplay)
-        state.episode = episode
-        narration_texts = [s.text for s in state.screenplay.scenes]
-        reply = BotReply(text=f"⏳ جارٍ توليد {len(episode.scenes)} مشهد على معالج GPU حقيقي - يستغرق هذا بضع دقائق لكل مشهد.")
-        return reply, episode, narration_texts
+        screenplay = state.screenplay
+        reply = BotReply(
+            text=(
+                f"⏳ جارٍ توليد {len(screenplay.lines)} مقطع حوار حقيقي بتزامن شفاه فعلي - "
+                "يستغرق هذا دقائق. التكلفة الحقيقية تُحسب من الصوت الفعلي بعد الانتهاء، لا قبله."
+            )
+        )
+        return reply, screenplay
 
-    def format_produced(self, chat_id: str, produced: ProducedEpisode) -> BotReply:
+    def format_produced(self, chat_id: str, produced: ProducedDialogueEpisode) -> BotReply:
         self._states.setdefault(chat_id, _ChatState()).produced = produced
         if produced.stitched_path is None:
             return BotReply(
                 text=(
-                    f"تم توليد {len(produced.clips)} مقطع لكن تعذّر دمجها "
-                    f"(لا يوجد دامج عن بُعد مُهيَّأ). التكلفة الحقيقية حتى الآن: ${produced.total_cost_usd:.3f}"
+                    f"تم توليد {len(produced.clips)} مقطع لكن تعذّر دمجها. "
+                    f"التكلفة الحقيقية حتى الآن: ${produced.total_cost_usd:.3f}"
                 )
             )
         return BotReply(
-            text=f"✅ تم. {len(produced.clips)} مشهد، التكلفة الحقيقية ${produced.total_cost_usd:.3f}.",
+            text=f"✅ تم. {len(produced.clips)} مقطع حوار، التكلفة الحقيقية ${produced.total_cost_usd:.3f}.",
             video_path=produced.stitched_path,
             buttons=[("📤 نشر على YouTube", "publish:youtube"), ("🗑️ تجاهل", "discard")],
         )
@@ -124,10 +149,15 @@ class BotConversation:
         return BotReply(text=f"✅ نُشر على {platform}: {result.video_id}")
 
     @staticmethod
-    def _format_screenplay(screenplay: Screenplay) -> str:
-        lines = [f"📝 {screenplay.title}", ""]
-        for s in screenplay.scenes:
-            lines.append(f"{s.index + 1}. {s.text}")
+    def _format_screenplay(screenplay: DialogueScreenplay) -> str:
+        lines = [f"📝 {screenplay.title}", "", "الشخصيات:"]
+        for c in screenplay.characters:
+            lines.append(f"- {c.name}")
         lines.append("")
-        lines.append("لتعديل مشهد: /edit <الرقم> <النص الجديد>")
+        for l in screenplay.lines:
+            lines.append(f"{l.index + 1}. {l.character}: {l.line}")
+        lines.append("")
+        est_cost = len(screenplay.lines) * ESTIMATED_SECONDS_PER_LINE * PRICE_PER_SECOND_USD["480p"]
+        lines.append(f"(تكلفة تقديرية تقريبية: ${est_cost:.2f} - التكلفة الحقيقية تُحسب بعد التوليد الفعلي)")
+        lines.append("لتعديل سطر: /edit <الرقم> <الحوار الجديد>")
         return "\n".join(lines)

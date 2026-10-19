@@ -14,6 +14,14 @@ asking for both the cast list AND every line in a single structured
 call regularly produced an inconsistent character roster (a name spelled
 two ways is two different reference photos) - cast first, then lines
 constrained to that exact roster.
+
+Owner's instruction, 2026-10-19 ("الصور طبعا افتراضية... تُسند تلقائيًا
+حسب وصف كل شخصية" - the photos are of course placeholders, assigned
+automatically per character description): the cast step now also infers
+each character's gender/age_group, and every Character is built with a
+real reference_image_path and voice already assigned (see
+character_photos.py) - never the empty string DialoguePipeline refuses
+to accept.
 """
 from __future__ import annotations
 
@@ -22,14 +30,18 @@ import json
 from src.agents._text_parsing import parse_json_object_array
 from src.integrations.reasoning_client import AgentReasoningClient
 from src.models import Character, DialogueLine, DialogueScreenplay
+from src.workflows.character_photos import resolve_placeholder_photo, resolve_placeholder_voice
 
 _CAST_SYSTEM_PROMPT = """You are a casting director listing the speaking characters a short story needs.
 
 Rules:
-- Output ONLY a JSON array of strings, nothing else - no markdown fences, no commentary.
-- Each string is one character's name, as it should appear consistently everywhere (same spelling every time).
+- Output ONLY a JSON array of objects, nothing else - no markdown fences, no commentary.
+- Each object has exactly three keys:
+  - "name": the character's name, as it should appear consistently everywhere (same spelling every time).
+  - "gender": "male" or "female" - your best real inference from how the premise describes or refers to them.
+  - "age_group": "young" (child/teen/20s), "middle" (30s-50s), or "older" (60+) - your best real inference.
 - Only characters who actually SPEAK a line - no narrators, no silent background characters.
-- 2 to 6 names, in the SAME language/script as the premise."""
+- 2 to 6 characters, names in the SAME language/script as the premise."""
 
 _LINES_SYSTEM_PROMPT = """You are a screenwriter turning a premise and a fixed cast into a real scripted scene - actual dialogue, not narration.
 
@@ -56,7 +68,8 @@ class DialogueWriterAgent:
             raise DialogueWriterError(f"line_count must be >= 1, got {line_count}")
 
         cast_raw = self._reasoning_client.complete(_CAST_SYSTEM_PROMPT, premise)
-        cast_names = self._parse_cast(cast_raw)
+        cast = self._parse_cast(cast_raw)
+        cast_names = [c["name"] for c in cast]
 
         lines_system_prompt = _LINES_SYSTEM_PROMPT.format(line_count=line_count, cast=", ".join(cast_names))
         lines_raw = self._reasoning_client.complete(lines_system_prompt, premise)
@@ -72,7 +85,14 @@ class DialogueWriterAgent:
                     f"Line speaker {item['character']!r} is not in the cast {cast_names}: {lines_raw!r}"
                 )
 
-        characters = [Character(name=name, reference_image_path="") for name in cast_names]
+        characters = [
+            Character(
+                name=c["name"],
+                reference_image_path=resolve_placeholder_photo(c["gender"], c["age_group"]),
+                voice=resolve_placeholder_voice(c["gender"]),
+            )
+            for c in cast
+        ]
         dialogue_lines = [
             DialogueLine(index=i, character=item["character"], line=item["line"], action=item["action"])
             for i, item in enumerate(parsed_lines[:line_count])
@@ -80,7 +100,7 @@ class DialogueWriterAgent:
         return DialogueScreenplay(title=title, premise=premise, characters=characters, lines=dialogue_lines)
 
     @staticmethod
-    def _parse_cast(raw_reply: str) -> list[str]:
+    def _parse_cast(raw_reply: str) -> list[dict]:
         text = raw_reply.strip()
         if text.startswith("```"):
             text = text.strip("`")
@@ -91,6 +111,11 @@ class DialogueWriterAgent:
             parsed = json.loads(text)
         except json.JSONDecodeError as exc:
             raise DialogueWriterError(f"Cast reply was not valid JSON: {raw_reply!r}") from exc
-        if not isinstance(parsed, list) or not all(isinstance(item, str) for item in parsed) or not parsed:
-            raise DialogueWriterError(f"Cast reply was not a non-empty JSON array of strings: {raw_reply!r}")
+        if not isinstance(parsed, list) or not parsed:
+            raise DialogueWriterError(f"Cast reply was not a non-empty JSON array: {raw_reply!r}")
+        for item in parsed:
+            if not isinstance(item, dict) or not all(k in item for k in ("name", "gender", "age_group")):
+                raise DialogueWriterError(
+                    f"Cast reply item {item!r} is missing 'name'/'gender'/'age_group': {raw_reply!r}"
+                )
         return parsed

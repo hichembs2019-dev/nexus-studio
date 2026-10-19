@@ -547,23 +547,90 @@ real next step is the owner adding real funds/a payment method at
 `fal.ai/dashboard/billing`; the code path itself needs no further
 change to produce a real result once that is done.
 
+## Placeholder character photos/voices, auto-assigned (2026-10-19)
+
+Owner's instruction ("الصور طبعا افتراضية... مجموعة صور افتراضية جاهزة
+(رجل/امرأة بأعمار مختلفة)، تُسند تلقائيًا حسب وصف كل شخصية" - the photos
+are of course placeholders, a ready set of placeholder photos (man/woman,
+different ages), assigned automatically per character description): this
+closes the "Character reference photos are not auto-generated" gap this
+file used to list.
+
+- Six original, Pillow-generated illustrations
+  (`assets/placeholder_characters/{male,female}_{young,middle,older}.png`,
+  `src/workflows/generate_placeholder_avatars.py`) - not real people, so
+  there is no likeness/copyright question to verify, unlike a real-person
+  stock photo would raise.
+- `DialogueWriterAgent`'s cast-step prompt now also asks for each
+  character's `gender`/`age_group`; `src/workflows/character_photos.py`
+  resolves those to one of the six photos and to
+  `ar-TN-HediNeural`/`ar-TN-ReemNeural` (male/female - both real,
+  live-verified Tunisian Arabic Azure voices, see "Azure TTS voiceover"
+  above). Every `Character` DialogueWriterAgent builds now carries a real
+  `reference_image_path` and `voice` - never the empty string
+  `DialoguePipeline.produce()` refuses to accept.
+- Covered by `tests/test_dialogue_writer.py::test_write_dialogue_screenplay_assigns_different_photos_by_gender_and_age`
+  (distinct photo/voice for a male-older vs. female-young character) and
+  `::test_write_dialogue_screenplay_raises_if_cast_item_is_missing_a_required_field`.
+
+## Bot rewired to the real dialogue pipeline (2026-10-19)
+
+Owner's instruction ("بل اطلب من البوت مثلما كان يفعل يرسل لي السيناريو و
+يسالني الموافقة" - have the bot do what it used to: send me the
+screenplay and ask for approval): this closes the "DialogueWriterAgent/
+DialoguePipeline are not wired into the Telegram bot" gap. `/new` now
+builds a `DialogueScreenplay` via `DialogueWriterAgent` (line count
+estimated from the requested duration, `ESTIMATED_SECONDS_PER_LINE = 4.0`
+in `src/bot/conversation.py`) and sends it with the same Approve/Cancel
+buttons the old flow used; Approve runs `DialoguePipeline.produce()` in
+the background executor (`src/bot/runner.py`) - the one real-money moment
+(fal.ai speech-to-video spend), gated behind that same button, same as
+before. `App.conversation`/`App.dialogue_pipeline` are `None` together
+when `FAL_KEY`/`AZURE_SPEECH_KEY` are not configured; `src/main.py` now
+checks for that and exits with a clear log line instead of starting a bot
+with no pipeline to drive. The old `WriterAgent`/`DirectorAgent`/
+`EpisodePipeline` narration path still exists in the codebase (reachable
+directly, as README.md's "direct run" path already documented) but is no
+longer what the live bot runs.
+
+**Real bug found by the rewrite's own test, not by inspection**:
+`tests/test_bot_conversation.py::test_publish_youtube_success_reports_the_real_url`
+failed with `'ProducedDialogueEpisode' object has no attribute 'episode'`
+the first time it ran - `PublishingAgent.publish_episode` read
+`produced.episode.title`/`.premise` unconditionally, a field that exists
+on the old `ProducedEpisode` but not on `ProducedDialogueEpisode` (whose
+title/premise live on `.screenplay`). Publishing a real finished dialogue
+episode would have raised that `AttributeError` inside the `try`, which
+the method's own per-platform fault tolerance would have swallowed into a
+silent `"No client configured"`-shaped failure report rather than
+crashing visibly - the ✅ branch was dead code for every dialogue episode
+until fixed. Fixed in `src/agents/publisher.py` with a small
+`_title_and_premise()` helper that checks which of `.episode`/
+`.screenplay` the produced object actually has. Mutation-tested by
+construction: the test above is the one that caught the bug before the
+fix existed, and fails again if the `isinstance` branch is removed.
+
 ### What is NOT built yet (stated plainly, not implied)
 
-- **Character reference photos are not auto-generated.** `Character.reference_image_path`
-  must be a real photo supplied before `DialoguePipeline.produce()` will
-  run a line for that character - it raises `DialoguePipelineError`
-  rather than inventing a different face per line (see
-  `src/models.py` `Character` docstring). Getting a real, consistent
-  photo per character (generated once and reused, or supplied by the
-  owner) is not built.
-- **`DialogueWriterAgent`/`DialoguePipeline` are not wired into the
-  Telegram bot** (`src/bot/conversation.py`, `runner.py`) - they exist
-  and are unit-tested (see `tests/test_dialogue_writer.py`,
-  `tests/test_dialogue_pipeline.py`), and are reachable from
-  `src/app.py` (`App.dialogue_writer`, `App.dialogue_pipeline`), but
-  only through direct Python code today, the same "direct run" path the
-  old pipeline already documented in README.md. The `/new` flow in the
-  bot still runs the old narration pipeline.
 - **Multi-platform publishing** (TikTok/Instagram/X/Snapchat/Twitch/Kick)
   is still not built - unchanged from the earlier entry above, YouTube
   is still the only real publishing client.
+- **The bot is still not deployed anywhere.** All of the above is real,
+  tested code reachable by `python -m src.main` with real
+  `TELEGRAM_BOT_TOKEN`/`FAL_KEY`/`AZURE_SPEECH_KEY`/`GROQ_API_KEY` (or
+  `GEMINI_API_KEY`) set - no process is running it on any host yet, which
+  is why a real story sent to the bot on 2026-10-19 got no reply at all.
+  Needed before any real, owner-visible test: a host to run
+  `python -m src.main` persistently (a droplet/VM, matching
+  nexus-commerce's own deployment, or a container platform), with the
+  real env vars set and `ffmpeg` installed (`Dockerfile` already does
+  this for the image, matching episode_pipeline's own audio-merge
+  requirement).
+- **No real `DialoguePipeline.produce()` call has been made from the
+  bot.** The owner's standing instruction ("لا تفعل شيء بالمال و لا
+  تخسره" - don't do anything with the money, don't lose it) means the
+  Approve button's real fal.ai spend should only be pressed once the
+  owner is ready for it to happen, with the screenplay's estimated cost
+  already shown to them beforehand (`_format_screenplay`'s estimate
+  line) - this is a real-money action gated by human approval by design,
+  not yet exercised live.

@@ -42,7 +42,13 @@ class App:
     dialogue_writer: DialogueWriterAgent | None
     dialogue_pipeline: DialoguePipeline | None
     publisher: PublishingAgent
-    conversation: BotConversation
+    # Owner's instruction, 2026-10-19: the live bot runs the real
+    # DialogueWriterAgent/DialoguePipeline flow, not the old
+    # WriterAgent/DirectorAgent/EpisodePipeline one - conversation is
+    # None exactly when dialogue_writer/dialogue_pipeline are (no real
+    # FAL_KEY/AZURE_SPEECH_KEY), since there is no documentary fallback
+    # to drop back to for the bot anymore.
+    conversation: BotConversation | None
 
 
 def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
@@ -137,7 +143,7 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
         if force_mocks:
             publishing_clients["youtube"] = MockPublishingClient()
     publisher = PublishingAgent(publishing_clients)
-    conversation = BotConversation(writer, director, publisher)
+    conversation = BotConversation(dialogue_writer, publisher) if dialogue_writer is not None else None
 
     return App(
         settings=settings,

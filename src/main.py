@@ -22,7 +22,11 @@ def main() -> None:
         logger.error("TELEGRAM_BOT_TOKEN not set - the bot has nothing to listen on, exiting")
         return
 
-    application = build_application(settings.telegram_bot_token, app.conversation, app.pipeline)
+    if app.conversation is None or app.dialogue_pipeline is None:
+        logger.error("FAL_KEY and/or AZURE_SPEECH_KEY not set - the real dialogue pipeline is unavailable, exiting")
+        return
+
+    application = build_application(settings.telegram_bot_token, app.conversation, app.dialogue_pipeline)
     logger.info("nexus-studio bot starting (long-polling)")
     application.run_polling()
 

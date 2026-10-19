@@ -2,26 +2,35 @@ from __future__ import annotations
 
 import json
 
-from src.agents.director import DirectorAgent
+from src.agents.dialogue_writer import DialogueWriterAgent
 from src.agents.publisher import PublishingAgent
-from src.agents.writer import WriterAgent
-from src.bot.conversation import BotConversation
+from src.bot.conversation import ESTIMATED_SECONDS_PER_LINE, BotConversation
 from src.integrations.publishing_client import MockPublishingClient
 from src.integrations.reasoning_client import MockAgentReasoningClient
-from src.models import CLIP_SECONDS, Episode, ProducedEpisode, Scene
+from src.models import Character, DialogueLine, DialogueScreenplay, ProducedDialogueClip, ProducedDialogueEpisode
+
+
+def _cast_reply(*people):
+    return json.dumps([{"name": n, "gender": g, "age_group": a} for n, g, a in people])
+
+
+def _lines_reply(*lines):
+    return json.dumps([{"character": c, "line": l, "action": a} for c, l, a in lines])
 
 
 def _conversation(reasoning_replies: list[str], youtube_video_ids: list[str] | None = None) -> tuple[BotConversation, MockPublishingClient]:
     reasoning = MockAgentReasoningClient(scripted_replies=reasoning_replies)
     youtube = MockPublishingClient(scripted_video_ids=youtube_video_ids or ["yt-id"])
-    conversation = BotConversation(WriterAgent(reasoning), DirectorAgent(reasoning), PublishingAgent({"youtube": youtube}))
+    conversation = BotConversation(DialogueWriterAgent(reasoning), PublishingAgent({"youtube": youtube}))
     return conversation, youtube
 
 
 def test_new_with_explicit_seconds_writes_a_screenplay_sized_to_them():
-    conversation, _ = _conversation([json.dumps(["beat one", "beat two"])])
+    cast = _cast_reply(("فوزية", "female", "middle"))
+    lines = _lines_reply(("فوزية", "beat one", "smiling"), ("فوزية", "beat two", "waving"))
+    conversation, _ = _conversation([cast, lines])
 
-    reply = conversation.handle_new("chat1", f"{int(2 * CLIP_SECONDS)} A lone astronaut finds a signal.")
+    reply = conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} A lone astronaut finds a signal.")
 
     assert "beat one" in reply.text
     assert "beat two" in reply.text
@@ -29,9 +38,13 @@ def test_new_with_explicit_seconds_writes_a_screenplay_sized_to_them():
 
 
 def test_new_without_a_leading_number_uses_the_default_duration_and_whole_text_as_premise():
-    reasoning = MockAgentReasoningClient(scripted_replies=[json.dumps(["b"] * round(30 / CLIP_SECONDS))])
-    youtube = MockPublishingClient()
-    conversation = BotConversation(WriterAgent(reasoning), DirectorAgent(reasoning), PublishingAgent({"youtube": youtube}))
+    from src.bot.conversation import DEFAULT_TARGET_SECONDS
+
+    line_count = max(2, round(DEFAULT_TARGET_SECONDS / ESTIMATED_SECONDS_PER_LINE))
+    cast = _cast_reply(("فوزية", "female", "middle"))
+    lines = _lines_reply(*[("فوزية", f"b{i}", "") for i in range(line_count)])
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast, lines])
+    conversation = BotConversation(DialogueWriterAgent(reasoning), PublishingAgent({}))
 
     conversation.handle_new("chat1", "A lone astronaut finds a signal.")
 
@@ -46,9 +59,11 @@ def test_new_with_empty_text_asks_for_an_idea_without_calling_the_writer():
     assert "الاستخدام" in reply.text
 
 
-def test_edit_updates_the_named_scene_and_resends_the_screenplay():
-    conversation, _ = _conversation([json.dumps(["beat one", "beat two"])])
-    conversation.handle_new("chat1", f"{int(2 * CLIP_SECONDS)} idea")
+def test_edit_updates_the_named_line_and_resends_the_screenplay():
+    cast = _cast_reply(("فوزية", "female", "middle"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
+    conversation, _ = _conversation([cast, lines])
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
 
     reply = conversation.handle_edit("chat1", "1 a much better beat")
 
@@ -57,13 +72,15 @@ def test_edit_updates_the_named_scene_and_resends_the_screenplay():
     assert "beat two" in reply.text
 
 
-def test_edit_on_an_out_of_range_scene_reports_it_clearly():
-    conversation, _ = _conversation([json.dumps(["beat one"])])
-    conversation.handle_new("chat1", f"{int(CLIP_SECONDS)} idea")
+def test_edit_on_an_out_of_range_line_reports_it_clearly():
+    cast = _cast_reply(("فوزية", "female", "middle"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
+    conversation, _ = _conversation([cast, lines])
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
 
     reply = conversation.handle_edit("chat1", "5 something")
 
-    assert "مشهد رقم 5" in reply.text
+    assert "سطر رقم 5" in reply.text
 
 
 def test_edit_without_a_draft_tells_the_user_to_start_with_new():
@@ -74,53 +91,46 @@ def test_edit_without_a_draft_tells_the_user_to_start_with_new():
     assert "/new" in reply.text
 
 
-def test_approve_runs_the_director_and_returns_an_episode():
-    conversation, _ = _conversation([json.dumps(["beat one"]), json.dumps(["a visual shot"])])
-    conversation.handle_new("chat1", f"{int(CLIP_SECONDS)} idea")
+def test_approve_returns_the_exact_draft_screenplay_for_real_production():
+    cast = _cast_reply(("فوزية", "female", "middle"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
+    conversation, _ = _conversation([cast, lines])
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
 
-    reply, episode, narration_texts = conversation.handle_approve("chat1")
+    reply, screenplay = conversation.handle_approve("chat1")
 
-    assert episode is not None
-    assert episode.scenes[0].positive_prompt == "a visual shot"
-    assert "توليد 1 مشهد" in reply.text
-
-
-def test_approve_returns_the_screenplays_own_text_as_narration_so_tts_narrates_in_the_original_language():
-    conversation, _ = _conversation([json.dumps(["beat one", "beat two"]), json.dumps(["shot a", "shot b"])])
-    conversation.handle_new("chat1", f"{int(2 * CLIP_SECONDS)} idea")
-
-    _, episode, narration_texts = conversation.handle_approve("chat1")
-
-    assert narration_texts == ["beat one", "beat two"]
-    assert narration_texts != [s.positive_prompt for s in episode.scenes]  # narration is the ORIGINAL-language beat, not the English visual prompt
+    assert screenplay is not None
+    assert screenplay.lines[0].line == "beat one"
+    assert "2" in reply.text  # mentions the real line count being generated
 
 
-def test_approve_without_a_draft_returns_none_episode():
+def test_approve_without_a_draft_returns_none_screenplay():
     conversation, _ = _conversation([])
 
-    reply, episode, narration_texts = conversation.handle_approve("chat1")
+    reply, screenplay = conversation.handle_approve("chat1")
 
-    assert episode is None
-    assert narration_texts is None
+    assert screenplay is None
     assert "/new" in reply.text
 
 
 def test_format_produced_offers_publish_buttons_when_stitched():
     conversation, _ = _conversation([])
-    episode = Episode(title="T", premise="p", scenes=[Scene(index=0, positive_prompt="x", negative_prompt="y", seed=1)])
-    produced = ProducedEpisode(episode=episode, clips=[], stitched_path="/tmp/out.mp4", total_generation_seconds=36.0)
+    screenplay = DialogueScreenplay(title="T", premise="p", characters=[Character(name="X", reference_image_path="/x.png")], lines=[])
+    clip = ProducedDialogueClip(line=DialogueLine(index=0, character="X", line="hi"), local_path="/tmp/c0.mp4", cost_usd=0.4)
+    produced = ProducedDialogueEpisode(screenplay=screenplay, clips=[clip], stitched_path="/tmp/out.mp4")
 
     reply = conversation.format_produced("chat1", produced)
 
     assert reply.video_path == "/tmp/out.mp4"
     assert reply.buttons == [("📤 نشر على YouTube", "publish:youtube"), ("🗑️ تجاهل", "discard")]
-    assert "0.009" in reply.text  # 36s * 0.89/3600 ≈ 0.0089
+    assert "0.400" in reply.text
 
 
 def test_format_produced_without_a_stitched_path_reports_cost_without_buttons():
     conversation, _ = _conversation([])
-    episode = Episode(title="T", premise="p", scenes=[])
-    produced = ProducedEpisode(episode=episode, clips=[], stitched_path=None, total_generation_seconds=10.0)
+    screenplay = DialogueScreenplay(title="T", premise="p", characters=[], lines=[])
+    clip = ProducedDialogueClip(line=DialogueLine(index=0, character="X", line="hi"), local_path="/tmp/c0.mp4", cost_usd=0.4)
+    produced = ProducedDialogueEpisode(screenplay=screenplay, clips=[clip], stitched_path=None)
 
     reply = conversation.format_produced("chat1", produced)
 
@@ -131,8 +141,8 @@ def test_format_produced_without_a_stitched_path_reports_cost_without_buttons():
 
 def test_publish_youtube_success_reports_the_real_url():
     conversation, youtube = _conversation([], youtube_video_ids=["abc123"])
-    episode = Episode(title="T", premise="p", scenes=[])
-    produced = ProducedEpisode(episode=episode, clips=[], stitched_path="/tmp/out.mp4", total_generation_seconds=1.0)
+    screenplay = DialogueScreenplay(title="T", premise="p", characters=[], lines=[])
+    produced = ProducedDialogueEpisode(screenplay=screenplay, clips=[], stitched_path="/tmp/out.mp4")
     conversation.format_produced("chat1", produced)
 
     reply = conversation.handle_publish("chat1", "youtube")
@@ -151,8 +161,8 @@ def test_publish_with_nothing_produced_reports_that():
 
 def test_publish_to_unconfigured_platform_reports_the_failure():
     conversation, _ = _conversation([])
-    episode = Episode(title="T", premise="p", scenes=[])
-    produced = ProducedEpisode(episode=episode, clips=[], stitched_path="/tmp/out.mp4", total_generation_seconds=1.0)
+    screenplay = DialogueScreenplay(title="T", premise="p", characters=[], lines=[])
+    produced = ProducedDialogueEpisode(screenplay=screenplay, clips=[], stitched_path="/tmp/out.mp4")
     conversation.format_produced("chat1", produced)
 
     reply = conversation.handle_publish("chat1", "tiktok")
@@ -162,22 +172,27 @@ def test_publish_to_unconfigured_platform_reports_the_failure():
 
 
 def test_cancel_clears_the_draft_so_approve_then_fails():
-    conversation, _ = _conversation([json.dumps(["beat one"])])
-    conversation.handle_new("chat1", f"{int(CLIP_SECONDS)} idea")
+    cast = _cast_reply(("فوزية", "female", "middle"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
+    conversation, _ = _conversation([cast, lines])
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
 
     conversation.handle_cancel("chat1")
-    reply, episode, narration_texts = conversation.handle_approve("chat1")
+    reply, screenplay = conversation.handle_approve("chat1")
 
-    assert episode is None
-    assert narration_texts is None
+    assert screenplay is None
     assert "/new" in reply.text
 
 
 def test_chats_are_independent():
-    conversation, _ = _conversation([json.dumps(["chat1 beat"]), json.dumps(["chat2 beat"])])
+    cast1 = _cast_reply(("فوزية", "female", "middle"))
+    lines1 = _lines_reply(("فوزية", "chat1 beat", ""), ("فوزية", "chat1 beat two", ""))
+    cast2 = _cast_reply(("جويدة", "female", "young"))
+    lines2 = _lines_reply(("جويدة", "chat2 beat", ""), ("جويدة", "chat2 beat two", ""))
+    conversation, _ = _conversation([cast1, lines1, cast2, lines2])
 
-    conversation.handle_new("chat1", f"{int(CLIP_SECONDS)} idea one")
-    conversation.handle_new("chat2", f"{int(CLIP_SECONDS)} idea two")
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea one")
+    conversation.handle_new("chat2", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea two")
 
     reply1 = conversation.handle_edit("chat1", "1 x")
     assert "chat2 beat" not in reply1.text

@@ -8,8 +8,12 @@ from src.agents.dialogue_writer import DialogueWriterAgent, DialogueWriterError
 from src.integrations.reasoning_client import MockAgentReasoningClient
 
 
+def _cast_reply(*people):
+    return json.dumps([{"name": n, "gender": g, "age_group": a} for n, g, a in people])
+
+
 def test_write_dialogue_screenplay_builds_cast_then_lines():
-    cast_reply = json.dumps(["فوزية", "جويدة"])
+    cast_reply = _cast_reply(("فوزية", "female", "middle"), ("جويدة", "female", "young"))
     lines_reply = json.dumps(
         [
             {"character": "فوزية", "line": "العشاء جاهز يا جويدة", "action": "smiling, setting the table"},
@@ -23,7 +27,12 @@ def test_write_dialogue_screenplay_builds_cast_then_lines():
 
     assert screenplay.title == "Family Dinner"
     assert [c.name for c in screenplay.characters] == ["فوزية", "جويدة"]
-    assert all(c.reference_image_path == "" for c in screenplay.characters)
+    # Owner's instruction, 2026-10-19: real placeholder photos/voices are
+    # always assigned automatically - never the empty string
+    # DialoguePipeline refuses to accept.
+    assert all(c.reference_image_path for c in screenplay.characters)
+    assert all(c.reference_image_path.endswith(".png") for c in screenplay.characters)
+    assert all(c.voice for c in screenplay.characters)
     assert [l.character for l in screenplay.lines] == ["فوزية", "جويدة"]
     assert screenplay.lines[0].line == "العشاء جاهز يا جويدة"
     assert screenplay.lines[0].action == "smiling, setting the table"
@@ -33,8 +42,28 @@ def test_write_dialogue_screenplay_builds_cast_then_lines():
     assert "فوزية, جويدة" in reasoning.calls[1][0]
 
 
+def test_write_dialogue_screenplay_assigns_different_photos_by_gender_and_age():
+    cast_reply = _cast_reply(("Tom", "male", "older"), ("Amy", "female", "young"))
+    lines_reply = json.dumps(
+        [
+            {"character": "Tom", "line": "Hello", "action": "waving"},
+            {"character": "Amy", "line": "Hi", "action": "waving back"},
+        ]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    screenplay = writer.write_dialogue_screenplay("T", "p", line_count=2)
+
+    tom, amy = screenplay.characters
+    assert tom.reference_image_path != amy.reference_image_path
+    assert "male_older" in tom.reference_image_path
+    assert "female_young" in amy.reference_image_path
+    assert tom.voice != amy.voice
+
+
 def test_write_dialogue_screenplay_raises_if_a_line_speaker_is_not_in_the_cast():
-    cast_reply = json.dumps(["فوزية"])
+    cast_reply = _cast_reply(("فوزية", "female", "middle"))
     lines_reply = json.dumps([{"character": "شخص غريب", "line": "مرحبا", "action": "waving"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
@@ -44,7 +73,7 @@ def test_write_dialogue_screenplay_raises_if_a_line_speaker_is_not_in_the_cast()
 
 
 def test_write_dialogue_screenplay_raises_if_too_few_lines_were_returned():
-    cast_reply = json.dumps(["فوزية"])
+    cast_reply = _cast_reply(("فوزية", "female", "middle"))
     lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
@@ -61,8 +90,17 @@ def test_write_dialogue_screenplay_raises_on_invalid_cast_json():
         writer.write_dialogue_screenplay("T", "p", line_count=1)
 
 
+def test_write_dialogue_screenplay_raises_if_cast_item_is_missing_a_required_field():
+    cast_reply = json.dumps([{"name": "فوزية", "gender": "female"}])  # missing age_group
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="age_group"):
+        writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+
 def test_write_dialogue_screenplay_strips_markdown_fences_on_both_calls():
-    cast_reply = "```json\n" + json.dumps(["فوزية"]) + "\n```"
+    cast_reply = "```json\n" + _cast_reply(("فوزية", "female", "middle")) + "\n```"
     lines_reply = "```json\n" + json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}]) + "\n```"
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)

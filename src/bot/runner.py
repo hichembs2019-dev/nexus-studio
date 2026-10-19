@@ -11,18 +11,25 @@ not independently doc-verified beyond what nexus-studio's own
 telegram_client.py already notes (send_message/InlineKeyboardMarkup are
 reused from nexus-commerce's verified usage) - confirm on first live run.
 
-EpisodePipeline.produce() is slow (minutes) and synchronous; running it
-directly inside an async handler would block the whole bot. It runs in
-the default executor (a background thread) instead, so /new, /edit and
-button presses on OTHER chats keep working while a generation is in
-flight.
+DialoguePipeline.produce() is slow (minutes, real per-line TTS + fal.ai
+calls) and synchronous; running it directly inside an async handler
+would block the whole bot. It runs in the default executor (a
+background thread) instead, so /new, /edit and button presses on OTHER
+chats keep working while a generation is in flight.
+
+Owner's instruction, 2026-10-19 ("بل اطلب من البوت مثلما كان يفعل يرسل
+لي السيناريو و يسالني الموافقة"): this now drives DialoguePipeline
+(real character dialogue, lip-synced) instead of the old EpisodePipeline
+- the produce() call here is the one real-money moment (fal.ai speech-
+to-video spend), gated behind the SAME approve button the old pipeline
+used, never called on its own.
 """
 from __future__ import annotations
 
 import asyncio
 
 from src.bot.conversation import BotConversation
-from src.workflows.episode_pipeline import EpisodePipeline
+from src.workflows.dialogue_pipeline import DialoguePipeline
 
 
 def _markup(buttons):
@@ -33,7 +40,7 @@ def _markup(buttons):
     return InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=data) for label, data in buttons]])
 
 
-def build_application(bot_token: str, conversation: BotConversation, pipeline: EpisodePipeline):
+def build_application(bot_token: str, conversation: BotConversation, dialogue_pipeline: DialoguePipeline):
     from telegram import Update
     from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
 
@@ -43,9 +50,9 @@ def build_application(bot_token: str, conversation: BotConversation, pipeline: E
             with open(reply.video_path, "rb") as f:
                 await context.bot.send_video(chat_id=chat_id, video=f)
 
-    async def _produce_and_notify(chat_id: str, episode, narration_texts, context: ContextTypes.DEFAULT_TYPE) -> None:
+    async def _produce_and_notify(chat_id: str, screenplay, context: ContextTypes.DEFAULT_TYPE) -> None:
         loop = asyncio.get_running_loop()
-        produced = await loop.run_in_executor(None, pipeline.produce, episode, narration_texts)
+        produced = await loop.run_in_executor(None, dialogue_pipeline.produce, screenplay)
         reply = conversation.format_produced(chat_id, produced)
         await _send_reply(chat_id, context, reply)
 
@@ -71,10 +78,10 @@ def build_application(bot_token: str, conversation: BotConversation, pipeline: E
         data = query.data
 
         if data == "approve":
-            reply, episode, narration_texts = conversation.handle_approve(chat_id)
+            reply, screenplay = conversation.handle_approve(chat_id)
             await _send_reply(chat_id, context, reply)
-            if episode is not None:
-                asyncio.create_task(_produce_and_notify(chat_id, episode, narration_texts, context))
+            if screenplay is not None:
+                asyncio.create_task(_produce_and_notify(chat_id, screenplay, context))
         elif data in ("cancel", "discard"):
             reply = conversation.handle_cancel(chat_id)
             await _send_reply(chat_id, context, reply)
