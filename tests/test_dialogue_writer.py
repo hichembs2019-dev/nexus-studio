@@ -235,3 +235,41 @@ def test_write_complete_dialogue_screenplay_prompt_forbids_narrator_and_demands_
     lines_system_prompt = reasoning.calls[1][0]
     assert "narrator" in lines_system_prompt.lower()
     assert "copied EXACTLY" in lines_system_prompt
+
+
+def test_write_complete_dialogue_screenplay_raises_on_a_premise_with_no_real_quotes():
+    # Real bug found by code review, 2026-10-19: max(1, count) used to
+    # floor a genuinely quote-free premise at 1, telling the model "the
+    # premise contains exactly 1 directly quoted moment" when it
+    # contains zero - forcing an invented line, the one thing /full
+    # exists to guarantee never happens.
+    reasoning = MockAgentReasoningClient(scripted_replies=[])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="لم أجد أي اقتباس"):
+        writer.write_complete_dialogue_screenplay("T", "فكرة بلا أي كلام منقول حرفيًا")
+
+    assert reasoning.calls == []  # never even asked the model to invent one
+
+
+def test_parse_cast_rejects_a_null_field_value():
+    # Real bug found by code review, 2026-10-19: the old check only
+    # confirmed the keys existed, not that their values were real
+    # strings - {"gender": null} passed it and crashed deeper inside
+    # character_photos.py's None.strip() instead of raising a clear
+    # error here.
+    cast_reply = json.dumps([{"name": "X", "gender": None, "age_group": "middle"}])
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="non-string/empty"):
+        writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+
+def test_parse_cast_rejects_an_empty_string_field_value():
+    cast_reply = json.dumps([{"name": "X", "gender": "  ", "age_group": "middle"}])
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="non-string/empty"):
+        writer.write_dialogue_screenplay("T", "p", line_count=1)

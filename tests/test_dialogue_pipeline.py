@@ -167,6 +167,46 @@ def test_produce_keeps_already_paid_for_clips_when_a_later_line_fails(tmp_path):
     failed_line, error_message = produced.failed_lines[0]
     assert failed_line.index == 1
     assert "mock failure at call 1" in error_message
+    # the fal.ai call itself raised and was never billed for this line -
+    # must NOT carry the "real money spent" note
+    assert "تم صرف مال حقيقي" not in error_message
     # the real money already spent on the surviving clips must still be
     # reported, not thrown away along with the failed one
     assert produced.total_cost_usd == pytest.approx(2 * 1.0 * 0.10)
+
+
+def test_produce_reports_when_a_line_was_billed_by_fal_ai_before_the_failure(tmp_path, monkeypatch):
+    # Real bug found by code review, 2026-10-19: a single generic
+    # failure message used to let the bot claim EVERY failed line's
+    # cost "was not counted" - false whenever fal.ai's own real,
+    # billed call already succeeded and only a LATER local step (here:
+    # ffprobe) failed. A test that only checks a FalVideoError-style
+    # message would miss this - it has to check the real billing note
+    # actually appears when the paid call itself succeeded.
+    ref_path = str(tmp_path / "ref.jpg")
+    _ref_image(ref_path)
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    tts = MockTTSClient()
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path))
+    screenplay = DialogueScreenplay(
+        title="T", premise="p",
+        characters=[Character(name="A", reference_image_path=ref_path)],
+        lines=[DialogueLine(index=0, character="A", line="one", action="a1")],
+    )
+
+    import src.workflows.dialogue_pipeline as dialogue_pipeline_module
+
+    def _broken_ffprobe(path):
+        raise RuntimeError("ffprobe missing")
+
+    monkeypatch.setattr(dialogue_pipeline_module, "_ffprobe_duration", _broken_ffprobe)
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(produced.clips) == 0
+    assert len(produced.failed_lines) == 1
+    _, error_message = produced.failed_lines[0]
+    assert "تم صرف مال حقيقي" in error_message
+    assert len(fal_video.calls) == 1  # the real, billed call did happen

@@ -203,8 +203,15 @@ class BotConversation:
         # to discard every clip already paid for; now the ones that
         # failed are reported by number so the owner knows exactly which
         # real money bought nothing and which lines to retry with /edit.
-        lines = ", ".join(str(l.index + 1) for l, _ in produced.failed_lines)
-        return f"\n\n⚠️ فشلت {len(produced.failed_lines)} أسطر ولم تُحتسب تكلفتها (الأرقام: {lines}) - يمكنك تعديلها وإعادة المحاولة."
+        #
+        # Real bug found by code review, same day: this used to claim
+        # EVERY failed line's cost "was not counted" - false whenever
+        # the real fal.ai call already succeeded (and was billed) and
+        # only a later local step failed. DialoguePipeline now prefixes
+        # exactly those messages with a real billing note, so they are
+        # shown per line instead of one blanket (sometimes false) claim.
+        details = "\n".join(f"- سطر {l.index + 1}: {error}" for l, error in produced.failed_lines)
+        return f"\n\n⚠️ فشلت {len(produced.failed_lines)} أسطر - يمكنك تعديلها وإعادة المحاولة:\n{details}"
 
     def handle_publish(self, chat_id: str, platform: str) -> BotReply:
         state = self._states.get(chat_id)

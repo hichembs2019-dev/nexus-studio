@@ -163,7 +163,17 @@ class DialogueWriterAgent:
         return self._write(title, premise, line_count, _LINES_SYSTEM_PROMPT)
 
     def write_complete_dialogue_screenplay(self, title: str, premise: str) -> DialogueScreenplay:
-        line_count = max(1, _count_quoted_moments(premise))
+        # Real bug found by code review, 2026-10-19: max(1, ...) used to
+        # floor a genuinely quote-free premise at 1, which told the
+        # model "the premise contains exactly 1 directly quoted moment"
+        # when it contains zero - forcing it to invent the one thing
+        # /full exists to guarantee never happens.
+        line_count = _count_quoted_moments(premise)
+        if line_count < 1:
+            raise DialogueWriterError(
+                "لم أجد أي اقتباس حقيقي (بين «» أو \"\") في النص - /full يحتاج كلامًا منقولًا حرفيًا عن الشخصيات لبنائه. "
+                "استخدم /new بدلًا منه إن كنت تريد حوارًا جديدًا بلا اقتباسات جاهزة."
+            )
         return self._write(title, premise, line_count, _COMPLETE_LINES_SYSTEM_PROMPT)
 
     def _write(self, title: str, premise: str, line_count: int, lines_system_prompt_template: str) -> DialogueScreenplay:
@@ -214,8 +224,19 @@ class DialogueWriterAgent:
         if not isinstance(parsed, list) or not parsed:
             raise DialogueWriterError(f"Cast reply was not a non-empty JSON array: {raw_reply!r}")
         for item in parsed:
-            if not isinstance(item, dict) or not all(k in item for k in ("name", "gender", "age_group")):
+            # Real bug found by code review, 2026-10-19: this only
+            # checked the keys existed, never that their values were
+            # real non-empty strings. A model reply like {"name": "X",
+            # "gender": null, "age_group": "middle"} passed this check,
+            # then crashed deeper with an uncaught AttributeError inside
+            # character_photos.py's None.strip() instead of a clear
+            # error here - exactly the kind of failure the global error
+            # handler (runner.py) now at least reports, but this is the
+            # right place to catch it with a real, specific message.
+            if not isinstance(item, dict) or not all(
+                isinstance(item.get(k), str) and item.get(k).strip() for k in ("name", "gender", "age_group")
+            ):
                 raise DialogueWriterError(
-                    f"Cast reply item {item!r} is missing 'name'/'gender'/'age_group': {raw_reply!r}"
+                    f"Cast reply item {item!r} is missing or has a non-string/empty 'name'/'gender'/'age_group': {raw_reply!r}"
                 )
         return parsed

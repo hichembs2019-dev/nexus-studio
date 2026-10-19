@@ -48,6 +48,22 @@ same file already fixed once, from an entirely different cause. Every
 create_task() call below now keeps a strong reference in
 _background_tasks (module-level per build_application call) until it
 finishes, per the exact pattern Python's own docs recommend.
+
+Real gap found by a dedicated code review, 2026-10-19 ("لن اكف عنك الا
+ان تراجع كل شيء و تكتشف الاخطاء" - I won't stop until you review
+everything and find the bugs): the Approve-button fix above only
+covers the one real-money call. `_new`/`_full`/`_edit` call
+BotConversation.handle_new()/handle_full()/handle_edit() with no error
+handling at all - if DialogueWriterAgent's reasoning call fails (Groq
+AND its Gemini fallback both failing, or a malformed reply no retry
+recovers from), the exception propagates out of the handler with
+nothing sent to Telegram - the exact same "owner gets total silence"
+failure class the Approve-button fix exists to prevent, just reachable
+from a different command. python-telegram-bot's own Application
+supports a single global error_handler for exactly this
+(add_error_handler) instead of wrapping every individual handler -
+registered below, it reports any uncaught exception from ANY handler
+to the chat it happened in.
 """
 from __future__ import annotations
 
@@ -145,7 +161,19 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
             reply = conversation.handle_publish(chat_id, platform)
             await _send_reply(chat_id, context, reply)
 
+    async def _on_error(update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = None
+        if isinstance(update, Update) and update.effective_chat is not None:
+            chat_id = update.effective_chat.id
+        if chat_id is None:
+            return
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=f"❌ حدث خطأ حقيقي غير متوقع: {context.error}")
+        except Exception:
+            pass
+
     application = Application.builder().token(bot_token).build()
+    application.add_error_handler(_on_error)
     application.add_handler(CommandHandler("new", _new))
     application.add_handler(CommandHandler("full", _full))
     application.add_handler(CommandHandler("edit", _edit))

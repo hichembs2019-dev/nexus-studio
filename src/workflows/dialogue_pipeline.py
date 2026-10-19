@@ -111,6 +111,14 @@ class DialoguePipeline:
             # money-spending network calls are caught here - a bad
             # screenplay (checks above) still stops everything, because
             # continuing would just repeat the same structural error.
+            # Real bug found by code review, 2026-10-19: the single
+            # except below used to let _format_failed_lines (conversation.py)
+            # tell the owner every failed line's cost "was not counted" -
+            # false whenever generate_speech_to_video() itself already
+            # succeeded (and was billed) and only the LATER disk-write or
+            # ffprobe step failed. billed tracks exactly that so the real
+            # message can say which case actually happened.
+            billed = False
             try:
                 prefix = f"{slug}_line{line.index:03d}"
                 audio_bytes = self._tts.synthesize(line.line, character.voice, lang=self._tts_lang)
@@ -127,6 +135,7 @@ class DialoguePipeline:
                     audio_data_uri=audio_data_uri,
                     resolution=self._resolution,
                 )
+                billed = True
                 clip_path = os.path.join(self._output_dir, f"{prefix}.mp4")
                 with open(clip_path, "wb") as f:
                     f.write(clip_bytes)
@@ -135,7 +144,10 @@ class DialoguePipeline:
                 cost = duration * PRICE_PER_SECOND_USD[self._resolution]
                 clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
             except Exception as exc:
-                failed_lines.append((line, str(exc)))
+                message = str(exc)
+                if billed:
+                    message = f"[تم صرف مال حقيقي عند fal.ai قبل هذا الفشل - راجع لوحة fal.ai] {message}"
+                failed_lines.append((line, message))
                 continue
 
         stitched_path = self._stitch(clips, slug) if len(clips) > 1 else (clips[0].local_path if clips else None)
