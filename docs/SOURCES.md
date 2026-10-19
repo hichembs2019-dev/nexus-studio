@@ -638,6 +638,13 @@ This is a prompt-engineering fix, not something a mocked unit test can prove end
 
 Fixed in both prompts: `_CAST_SYSTEM_PROMPT` now explicitly forbids a "narrator"/"راوي" role - a first-person memoir narrator must be cast as a real character (by name if given, otherwise by their real role, e.g. "الزوج") who appears in scenes. `_LINES_SYSTEM_PROMPT` now explicitly forbids any line that summarizes or recounts past events in past tense, and instructs the model to dramatize the premise's own already-quoted scenes instead. Covered by `tests/test_dialogue_writer.py::test_write_dialogue_screenplay_prompts_forbid_a_narrator_role`, mutation-tested the same way as the fix above (reverted, confirmed the test fails on the exact assertion naming "راوي"/"narrator", restored, confirmed green). Same caveat as above: this proves the instruction reached the model, not that the model obeys it - the owner's next real result is the actual proof.
 
+## Language and visual style, 2026-10-19
+
+Owner asked plainly: "و ما هي اللغة التي يتكلمون بها؟" (what language do they speak?) and "اريدهم مثل المسلسلات التركية" (I want them like Turkish TV dramas).
+
+- **Language**: `_LINES_SYSTEM_PROMPT` requires lines "in the SAME language as the premise" - since the owner's premise is Arabic, the dialogue text is Arabic. The real, live-verified voices actually synthesizing it (`character_photos.py`, "Azure TTS voiceover" above) are `ar-TN-HediNeural`/`ar-TN-ReemNeural` - Tunisian Arabic specifically, not generic Modern Standard Arabic or another dialect.
+- **Visual style**: nothing previously pushed the real fal.ai generation toward any particular look - `DialogueLine.action` was sent to the model as-is, a bare stage direction ("smiling, setting the table"). `dialogue_pipeline.py` now appends a fixed `CINEMATIC_STYLE_SUFFIX` ("cinematic lighting, warm color grading, emotional close-up shot, high production value television drama") to every real prompt sent to fal.ai. This is a real code change, confirmed by test (`tests/test_dialogue_pipeline.py`, both prompt assertions now include the suffix) - **not a claim that the generated video actually looks like a Turkish drama**, which only a real generated clip can prove and none has been produced with this change yet.
+
 ### What is NOT built yet (stated plainly, not implied)
 
 - **Multi-platform publishing** (TikTok/Instagram/X/Snapchat/Twitch/Kick)

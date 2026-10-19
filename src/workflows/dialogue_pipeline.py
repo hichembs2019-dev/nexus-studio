@@ -7,6 +7,14 @@ plus a narration overlay.
 Unlike EpisodePipeline, clip length here is NOT fixed (CLIP_SECONDS) - it
 is however long that line's own TTS audio runs, because the model lip-
 syncs to the real audio track it is given.
+
+Owner's instruction, 2026-10-19 ("اريدهم مثل المسلسلات التركية" - I want
+them like Turkish TV dramas): DialogueLine.action only ever carried a
+short, bare stage direction ("smiling, setting the table"), with nothing
+pushing the actual visual generation toward any particular look.
+CINEMATIC_STYLE_SUFFIX is appended to every real fal.ai prompt so every
+clip reaches for the same warm, close, high-production-value television
+drama look rather than a flat, undirected default.
 """
 from __future__ import annotations
 
@@ -19,6 +27,8 @@ import subprocess
 from src.integrations.fal_video_client import PRICE_PER_SECOND_USD, FalVideoClient
 from src.integrations.tts_client import TTSClient
 from src.models import DialogueScreenplay, ProducedDialogueClip, ProducedDialogueEpisode
+
+CINEMATIC_STYLE_SUFFIX = ", cinematic lighting, warm color grading, emotional close-up shot, high production value television drama"
 
 
 class DialoguePipelineError(Exception):
@@ -100,7 +110,7 @@ class DialoguePipeline:
             audio_data_uri = _bytes_data_uri(audio_bytes, "audio/mpeg")
 
             clip_bytes = self._fal_video.generate_speech_to_video(
-                prompt=line.action or f"{character.name} speaking",
+                prompt=(line.action or f"{character.name} speaking") + CINEMATIC_STYLE_SUFFIX,
                 image_data_uri=image_data_uri,
                 audio_data_uri=audio_data_uri,
                 resolution=self._resolution,

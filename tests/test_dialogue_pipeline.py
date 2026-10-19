@@ -8,7 +8,7 @@ import pytest
 from src.integrations.fal_video_client import MockFalVideoClient
 from src.integrations.tts_client import MockTTSClient
 from src.models import Character, DialogueLine, DialogueScreenplay
-from src.workflows.dialogue_pipeline import DialoguePipeline, DialoguePipelineError
+from src.workflows.dialogue_pipeline import CINEMATIC_STYLE_SUFFIX, DialoguePipeline, DialoguePipelineError
 
 
 def _ref_image(path: str) -> None:
@@ -63,7 +63,7 @@ def test_produce_single_line_calls_tts_then_fal_with_data_uris_and_saves_the_cli
     assert tts.calls == [("العشاء جاهز", "ar-TN-HediNeural", "ar-TN")]
     assert len(fal_video.calls) == 1
     call = fal_video.calls[0]
-    assert call["prompt"] == "smiling, setting the table"
+    assert call["prompt"] == "smiling, setting the table" + CINEMATIC_STYLE_SUFFIX
     assert call["image_data_uri"].startswith("data:image/")
     assert call["audio_data_uri"].startswith("data:audio/mpeg;base64,")
     assert call["resolution"] == "480p"
@@ -91,7 +91,7 @@ def test_produce_falls_back_to_a_default_prompt_when_action_is_empty(tmp_path):
 
     pipeline.produce(screenplay)
 
-    assert fal_video.calls[0]["prompt"] == "Jouida speaking"
+    assert fal_video.calls[0]["prompt"] == "Jouida speaking" + CINEMATIC_STYLE_SUFFIX
 
 
 def test_produce_multi_line_stitches_clips_in_order(tmp_path):
