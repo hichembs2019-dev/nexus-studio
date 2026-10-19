@@ -42,6 +42,26 @@ def test_write_dialogue_screenplay_builds_cast_then_lines():
     assert "فوزية, جويدة" in reasoning.calls[1][0]
 
 
+def test_write_dialogue_screenplay_lines_prompt_requires_verbatim_quotes_and_forbids_contradiction():
+    # Real finding, 2026-10-19: a real story already full of directly
+    # quoted dialogue came back with invented lines contradicting it
+    # outright (a character answered where the premise says she stayed
+    # silent). This checks the instruction that fixes it is actually in
+    # the prompt sent to the model, not merely that the method runs -
+    # a check that only asserts the call happened would pass with this
+    # instruction deleted.
+    cast_reply = _cast_reply(("فوزية", "female", "middle"))
+    lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+    lines_system_prompt = reasoning.calls[1][0]
+    assert "EXACT wording" in lines_system_prompt
+    assert "did NOT say" in lines_system_prompt
+
+
 def test_write_dialogue_screenplay_assigns_different_photos_by_gender_and_age():
     cast_reply = _cast_reply(("Tom", "male", "older"), ("Amy", "female", "young"))
     lines_reply = json.dumps(

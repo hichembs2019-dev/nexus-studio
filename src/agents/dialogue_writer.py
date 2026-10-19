@@ -22,6 +22,20 @@ each character's gender/age_group, and every Character is built with a
 real reference_image_path and voice already assigned (see
 character_photos.py) - never the empty string DialoguePipeline refuses
 to accept.
+
+Real finding, 2026-10-19 ("القصة يجب ان تكون كما طلبتها بالظبط بدون
+تحويل" - the story must be exactly as I asked for it, no alteration):
+the first real multi-line premise (a real, painful personal story,
+already full of directly quoted dialogue in Arabic «guillemets») came
+back with invented lines contradicting the premise outright - one
+character answered immediately where the premise explicitly says she
+stayed silent and answered neither yes nor no, and another was given a
+line nobody said in the premise. `_LINES_SYSTEM_PROMPT` previously only
+asked for dialogue that "flows" and is "plausible", which gave the model
+room to invent freely even when the premise already supplied the real
+words. It now explicitly requires reusing a premise's own quoted
+dialogue verbatim where one exists, and forbids inventing a line a
+character is explicitly described as NOT saying.
 """
 from __future__ import annotations
 
@@ -52,7 +66,9 @@ Rules:
   - "character": one of these EXACT names (same spelling): {cast}
   - "line": what they actually SAY, in the SAME language as the premise, 1-2 short sentences a person would plausibly speak aloud - never a narrator's description of events.
   - "action": a short, visual-only English stage direction for this moment (facial expression, gesture, what they're doing) - NEVER repeat or translate the spoken line itself here, the video model lip-syncs the real audio and would render duplicated text as more speech.
-- The lines must flow as one continuous scene in order, matching the premise, with characters actually responding to each other."""
+- The lines must flow as one continuous scene in order, matching the premise, with characters actually responding to each other.
+- The premise is the real source of truth, not a loose inspiration: if it already contains a character's actual words (quoted directly, e.g. in "quotes" or «guillemets»), use that EXACT wording for their line - do not paraphrase or invent a different line for a moment the premise already gives you.
+- Never give a character a line the premise explicitly says they did NOT say, or have them respond where the premise explicitly says they stayed silent or did not answer - invent dialogue only to fill genuine gaps the premise leaves open, never to contradict what it states."""
 
 
 class DialogueWriterError(Exception):
