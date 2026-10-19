@@ -37,6 +37,17 @@ owner as an actual Telegram message instead of only the container logs -
 this is the one place in the whole bot where a failure must reach the
 owner's phone directly, since it is the one call nothing else here
 retries or falls back from.
+
+Real risk found on review, 2026-10-19: Python's own asyncio docs warn
+that the event loop holds only a WEAK reference to a Task created by
+asyncio.create_task() - "a task that isn't referenced elsewhere may get
+garbage collected at any time, even before it's done." _produce_and_notify
+runs for minutes and spends real money; a task silently disappearing
+mid-run would look exactly like the two-hour silent-hang incident this
+same file already fixed once, from an entirely different cause. Every
+create_task() call below now keeps a strong reference in
+_background_tasks (module-level per build_application call) until it
+finishes, per the exact pattern Python's own docs recommend.
 """
 from __future__ import annotations
 
@@ -57,6 +68,13 @@ def _markup(buttons):
 def build_application(bot_token: str, conversation: BotConversation, dialogue_pipeline: DialoguePipeline):
     from telegram import Update
     from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+
+    _background_tasks: set[asyncio.Task] = set()
+
+    def _spawn(coro) -> None:
+        task = asyncio.create_task(coro)
+        _background_tasks.add(task)
+        task.add_done_callback(_background_tasks.discard)
 
     async def _send_reply(chat_id: str, context: ContextTypes.DEFAULT_TYPE, reply) -> None:
         await context.bot.send_message(chat_id=chat_id, text=reply.text, reply_markup=_markup(reply.buttons))
@@ -118,7 +136,7 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
             reply, screenplay = conversation.handle_approve(chat_id)
             await _send_reply(chat_id, context, reply)
             if screenplay is not None:
-                asyncio.create_task(_produce_and_notify(chat_id, screenplay, context))
+                _spawn(_produce_and_notify(chat_id, screenplay, context))
         elif data in ("cancel", "discard"):
             reply = conversation.handle_cancel(chat_id)
             await _send_reply(chat_id, context, reply)

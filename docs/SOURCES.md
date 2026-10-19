@@ -723,6 +723,14 @@ Fixed: the per-line TTS + fal.ai + ffprobe block inside `produce()`'s loop is no
 
 Not yet proven on a real run with this fix deployed - same standard as every fix above.
 
+## A real risk found by review, not by a failure (2026-10-19)
+
+Owner's instruction: review everything before the next real attempt, not just react to the next failure. Re-read `src/bot/runner.py` end to end looking for anything else that could fail the same silent way the two bugs above already did.
+
+**Found**: Python's own `asyncio` documentation states plainly that the event loop holds only a *weak* reference to a `Task` created by `asyncio.create_task()` - "a task that isn't referenced elsewhere may get garbage collected at any time, even before it's done." `_produce_and_notify` (the one call that runs for minutes and spends real money) was being launched with `asyncio.create_task(...)` and the return value discarded immediately - exactly the pattern Python's docs warn against. This had not failed yet in anything observed tonight, but it is a real, documented risk for precisely the kind of long-running fire-and-forget background task this file already has two other silent-failure incidents on, from different causes.
+
+Fixed: `build_application` now keeps a `_background_tasks: set[asyncio.Task]` and a small `_spawn()` helper that adds every task to it and removes it via `task.add_done_callback(_background_tasks.discard)` once it finishes - the standard pattern from Python's own asyncio docs for exactly this situation. `runner.py` is this project's own documented "thin, not independently unit-tested" layer (see its own module docstring, and nexus-commerce's matching convention) - this fix is a direct application of CPython's documented guidance, not a guess, but like the rest of this file's real-integration code, confirmed only by passing `python3 -c "import ast; ast.parse(...)"` plus the full suite staying green, not by a dedicated unit test.
+
 ### What is NOT built yet (stated plainly, not implied)
 
 - **Multi-platform publishing** (TikTok/Instagram/X/Snapchat/Twitch/Kick)
