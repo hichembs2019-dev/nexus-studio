@@ -21,6 +21,20 @@ this change despite nothing ever having called it live (confirmed: a
 real story sent to the bot got no reply at all, because nothing is
 deployed to run either pipeline anywhere yet - see README's deployment
 section).
+
+Real finding, 2026-10-19 ("القصة يجب ان تكون كما كتبتها" - the story
+must be exactly as I wrote it, no shortening): a real ~900-word owner
+story sent as a single /new command arrived at the bot cut off mid-word
+("...لإحضار اب" instead of "...لإحضار ابني") - Telegram's own client
+auto-splits an outgoing text over roughly 4096 characters into several
+separate messages, and only the first one carried the /new command; the
+rest arrived as ordinary text messages the bot had no handler for and
+silently dropped. `handle_plain_text` now accumulates any ordinary
+(non-command) message per chat into `_ChatState.pending_text`, in the
+order it arrives; `/new` with no premise of its own uses exactly that
+accumulated text, unmodified - never summarized, never trimmed - so a
+long real story reaches DialogueWriterAgent complete regardless of how
+many pieces Telegram split it into.
 """
 from __future__ import annotations
 
@@ -31,7 +45,7 @@ from src.agents.publisher import PublishingAgent
 from src.integrations.fal_video_client import PRICE_PER_SECOND_USD
 from src.models import DialogueScreenplay, ProducedDialogueEpisode
 
-DEFAULT_TARGET_SECONDS = 30.0
+DEFAULT_TARGET_SECONDS = 60.0
 
 # A real line's spoken length depends on how much text the writer puts in
 # it (DialoguePipeline's own docstring: clip length is NOT fixed, it is
@@ -55,6 +69,7 @@ class BotReply:
 class _ChatState:
     screenplay: DialogueScreenplay | None = None
     produced: ProducedDialogueEpisode | None = None
+    pending_text: str = ""
 
 
 class BotConversation:
@@ -63,25 +78,39 @@ class BotConversation:
         self._publisher = publisher
         self._states: dict[str, _ChatState] = {}
 
+    def handle_plain_text(self, chat_id: str, text: str) -> None:
+        text = text.strip()
+        if not text:
+            return None
+        state = self._states.setdefault(chat_id, _ChatState())
+        state.pending_text = (state.pending_text + "\n" + text).strip() if state.pending_text else text
+        return None
+
     def handle_new(self, chat_id: str, args_text: str) -> BotReply:
         args_text = args_text.strip()
-        if not args_text:
-            return BotReply(text="الاستخدام: /new [عدد الثواني] <الفكرة>\nمثال: /new 30 رائد فضاء وحيد يجد إشارة على المريخ.")
+        state = self._states.setdefault(chat_id, _ChatState())
 
         target_seconds = DEFAULT_TARGET_SECONDS
-        premise = args_text
-        parts = args_text.split(maxsplit=1)
-        if len(parts) == 2 and parts[0].isdigit():
-            target_seconds = float(parts[0])
-            premise = parts[1]
+        typed_premise = args_text
+        if args_text:
+            parts = args_text.split(maxsplit=1)
+            if parts[0].isdigit():
+                target_seconds = float(parts[0])
+                typed_premise = parts[1] if len(parts) == 2 else ""
+
+        # The owner's own accumulated text (handle_plain_text, possibly
+        # several Telegram-split messages) always comes first and is
+        # never shortened - it IS the real story, verbatim.
+        premise = f"{state.pending_text}\n{typed_premise}".strip() if state.pending_text else typed_premise
 
         if not premise:
-            return BotReply(text="أعطني فكرة بعد عدد الثواني، مثلاً: /new 30 رائد فضاء وحيد يجد إشارة على المريخ.")
+            return BotReply(text="الاستخدام: أرسل قصتك كرسالة عادية (يمكن أن تكون طويلة وتنقسم لعدة رسائل)، ثم أرسل /new [عدد الثواني] لبناء السيناريو منها.\nأو مباشرة: /new 30 رائد فضاء وحيد يجد إشارة على المريخ.")
 
         title = premise[:50]
         line_count = max(2, round(target_seconds / ESTIMATED_SECONDS_PER_LINE))
         screenplay = self._dialogue_writer.write_dialogue_screenplay(title, premise, line_count)
-        self._states[chat_id] = _ChatState(screenplay=screenplay)
+        state.screenplay = screenplay
+        state.pending_text = ""
         return BotReply(text=self._format_screenplay(screenplay), buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
 
     def handle_edit(self, chat_id: str, args_text: str) -> BotReply:

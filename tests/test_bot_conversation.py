@@ -59,6 +59,49 @@ def test_new_with_empty_text_asks_for_an_idea_without_calling_the_writer():
     assert "الاستخدام" in reply.text
 
 
+def test_plain_text_messages_are_accumulated_and_new_without_args_uses_them_verbatim():
+    # Real finding, 2026-10-19: Telegram auto-splits a long outgoing
+    # message (~900 real words) into several plain messages, and only the
+    # first carries /new - the rest must still reach the writer, whole,
+    # not summarized.
+    cast = _cast_reply(("فوزية", "female", "middle"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
+    conversation, _ = _conversation([cast, lines])
+
+    conversation.handle_plain_text("chat1", "الجزء الأول من القصة الطويلة")
+    conversation.handle_plain_text("chat1", "والجزء الثاني الذي وصل في رسالة منفصلة")
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)}")
+
+    # the writer's second argument on each call is the premise it was given
+    sent_premise = conversation._dialogue_writer._reasoning_client.calls[0][1]
+    assert "الجزء الأول من القصة الطويلة" in sent_premise
+    assert "والجزء الثاني الذي وصل في رسالة منفصلة" in sent_premise
+
+
+def test_plain_text_accumulation_is_cleared_after_a_screenplay_is_built():
+    cast1 = _cast_reply(("فوزية", "female", "middle"))
+    lines1 = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
+    cast2 = _cast_reply(("جويدة", "female", "young"))
+    lines2 = _lines_reply(("جويدة", "new idea beat", ""), ("جويدة", "new idea beat two", ""))
+    conversation, _ = _conversation([cast1, lines1, cast2, lines2])
+
+    conversation.handle_plain_text("chat1", "القصة القديمة")
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)}")
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} فكرة جديدة تمامًا")
+
+    assert "القصة القديمة" not in conversation._dialogue_writer._reasoning_client.calls[2][1]
+
+
+def test_cancel_clears_pending_text_too():
+    conversation, _ = _conversation([])
+
+    conversation.handle_plain_text("chat1", "نص معلّق")
+    conversation.handle_cancel("chat1")
+    reply = conversation.handle_new("chat1", "")
+
+    assert "الاستخدام" in reply.text
+
+
 def test_edit_updates_the_named_line_and_resends_the_screenplay():
     cast = _cast_reply(("فوزية", "female", "middle"))
     lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))

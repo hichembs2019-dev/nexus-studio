@@ -42,7 +42,7 @@ def _markup(buttons):
 
 def build_application(bot_token: str, conversation: BotConversation, dialogue_pipeline: DialoguePipeline):
     from telegram import Update
-    from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+    from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
     async def _send_reply(chat_id: str, context: ContextTypes.DEFAULT_TYPE, reply) -> None:
         await context.bot.send_message(chat_id=chat_id, text=reply.text, reply_markup=_markup(reply.buttons))
@@ -60,6 +60,17 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         chat_id = str(update.effective_chat.id)
         reply = conversation.handle_new(chat_id, " ".join(context.args))
         await _send_reply(chat_id, context, reply)
+
+    async def _text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        # Real finding, 2026-10-19: Telegram's own client auto-splits an
+        # outgoing message over ~4096 characters into several separate
+        # messages - only the first one can carry the /new command, so a
+        # long real story needs every later piece collected here instead
+        # of being silently dropped. conversation.handle_plain_text()
+        # always returns None - no reply - so a multi-message story does
+        # not get a chat reply per fragment, only once /new is sent.
+        chat_id = str(update.effective_chat.id)
+        conversation.handle_plain_text(chat_id, update.message.text or "")
 
     async def _edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = str(update.effective_chat.id)
@@ -95,4 +106,5 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
     application.add_handler(CommandHandler("edit", _edit))
     application.add_handler(CommandHandler("cancel", _cancel))
     application.add_handler(CallbackQueryHandler(_button))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _text))
     return application
