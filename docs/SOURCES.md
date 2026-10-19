@@ -610,22 +610,33 @@ until fixed. Fixed in `src/agents/publisher.py` with a small
 construction: the test above is the one that caught the bug before the
 fix existed, and fails again if the `isinstance` branch is removed.
 
+## Real deployment, 2026-10-19 - a second real bug found live on first use
+
+Deployed to the owner's existing DigitalOcean droplet (`ubuntu-s-1vcpu-512mb-10gb-fral1`, IP `159.89.22.193` - already running `nexus-commerce` in the same `docker-compose.yml`; this was already real, paid infrastructure, not newly created). `git pull` + `docker compose up -d --build nexus-studio`, real `FAL_KEY` added to `.env` from the owner's own fal.ai dashboard. Confirmed live from the container's own logs: `nexus-studio bot starting (long-polling)`, real Telegram `getMe`/`deleteWebhook` calls both `200 OK`, `Application started`.
+
+**First real `/new` sent by the owner hit a genuine bug**, caught from the real logs, not inspection:
+
+```
+json.decoder.JSONDecodeError: Expecting value: line 1 column 1 (char 0)
+...
+DialogueWriterError: Cast reply was not valid JSON: ''
+```
+
+Root cause: `RealGroqReasoningClient.complete()` only treated an explicit `"error"` key in Groq's response as a failure. A real response came back `200 OK` with **no `"error"` key at all, but a genuinely empty `choices[0].message.content`** - this was returned as `""`, a seemingly-successful empty reply, so the `fallback` to `RealGeminiReasoningClient` (a real, separate-quota account, already wired and configured) was never attempted. `DialogueWriterAgent` then failed four calls later trying to JSON-parse `''`, with an error message that gave no hint the real cause was upstream in the reasoning call. Fixed: an empty/whitespace-only `content` is now treated exactly like an `"error"` key - it raises, which either reaches the real Gemini fallback or surfaces a clear `"empty content"` message instead of a confusing downstream JSON error. Mutation-tested: `test_groq_complete_falls_back_on_a_real_200_ok_with_empty_content` and `test_groq_complete_with_no_fallback_raises_clearly_on_empty_content` (`tests/test_reasoning_client.py`) both fail with the fix reverted (confirmed live: `git stash` on just that file, reran, both failed with the exact expected assertions; restored, both passed again).
+
+Not yet re-tested live after this fix - the owner's next real `/new` attempt is the real proof, not this paragraph.
+
 ### What is NOT built yet (stated plainly, not implied)
 
 - **Multi-platform publishing** (TikTok/Instagram/X/Snapchat/Twitch/Kick)
   is still not built - unchanged from the earlier entry above, YouTube
   is still the only real publishing client.
-- **The bot is still not deployed anywhere.** All of the above is real,
-  tested code reachable by `python -m src.main` with real
-  `TELEGRAM_BOT_TOKEN`/`FAL_KEY`/`AZURE_SPEECH_KEY`/`GROQ_API_KEY` (or
-  `GEMINI_API_KEY`) set - no process is running it on any host yet, which
-  is why a real story sent to the bot on 2026-10-19 got no reply at all.
-  Needed before any real, owner-visible test: a host to run
-  `python -m src.main` persistently (a droplet/VM, matching
-  nexus-commerce's own deployment, or a container platform), with the
-  real env vars set and `ffmpeg` installed (`Dockerfile` already does
-  this for the image, matching episode_pipeline's own audio-merge
-  requirement).
+- **The bot IS now deployed** (see "Real deployment, 2026-10-19" above) -
+  this entry was true earlier the same day (no process was running it
+  anywhere, which is why an earlier real story sent to the bot got no
+  reply at all) but is now out of date; left here with a correction
+  rather than silently deleted, per this project's own standing rule
+  about not erasing a claim that turned out to be wrong.
 - **No real `DialoguePipeline.produce()` call has been made from the
   bot.** The owner's standing instruction ("لا تفعل شيء بالمال و لا
   تخسره" - don't do anything with the money, don't lose it) means the

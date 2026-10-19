@@ -52,7 +52,19 @@ class RealGroqReasoningClient(AgentReasoningClient):
             payload = response.json()
             if "error" in payload:
                 raise RuntimeError(f"Groq completion failed: {payload['error'].get('message')}")
-            return payload["choices"][0]["message"]["content"] or ""
+            content = payload["choices"][0]["message"]["content"] or ""
+            if not content.strip():
+                # Real finding, 2026-10-19: a real 200 OK with a genuinely
+                # empty choices[0].message.content (no "error" key at all)
+                # slipped straight past the check above and was returned
+                # as if it were a real reply - DialogueWriterAgent then
+                # failed on "not valid JSON: ''" with no fallback ever
+                # attempted, even though a real, separate-quota Gemini
+                # fallback was configured and would have answered fine.
+                # An empty completion is exactly as unusable as an error
+                # one, so it is treated the same way here.
+                raise RuntimeError("Groq completion failed: empty content in a successful response")
+            return content
         except Exception:
             if self._fallback is not None:
                 return self._fallback.complete(system_prompt, user_prompt)

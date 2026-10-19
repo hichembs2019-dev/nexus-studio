@@ -48,6 +48,51 @@ def test_groq_complete_raises_clearly_on_a_real_error_response_with_no_fallback(
         client.complete("sys", "user")
 
 
+def test_groq_complete_falls_back_on_a_real_200_ok_with_empty_content(monkeypatch):
+    # Real finding, 2026-10-19: a real deployed run got a genuine 200 OK
+    # from Groq with no "error" key at all, but choices[0].message.content
+    # was empty - this used to be returned as if it were a real reply
+    # ("" or ""), and DialogueWriterAgent then failed deep inside JSON
+    # parsing ("not valid JSON: ''") instead of ever reaching the real,
+    # separate-quota Gemini fallback that was configured and available.
+    def fake_post(url, *, headers, json, timeout):
+        return _FakeHttpxResponse({"choices": [{"message": {"content": ""}}]})
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    class _FakeFallback:
+        def __init__(self):
+            self.calls = []
+
+        def complete(self, system_prompt, user_prompt):
+            self.calls.append((system_prompt, user_prompt))
+            return '["from gemini fallback"]'
+
+    fallback = _FakeFallback()
+    client = RealGroqReasoningClient(api_key="fake-key", model="openai/gpt-oss-120b", fallback=fallback)
+
+    result = client.complete("sys", "user")
+
+    assert result == '["from gemini fallback"]'
+    assert fallback.calls == [("sys", "user")]
+
+
+def test_groq_complete_with_no_fallback_raises_clearly_on_empty_content(monkeypatch):
+    def fake_post(url, *, headers, json, timeout):
+        return _FakeHttpxResponse({"choices": [{"message": {"content": "   "}}]})
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    client = RealGroqReasoningClient(api_key="fake-key", model="openai/gpt-oss-120b")
+
+    with pytest.raises(RuntimeError, match="empty content"):
+        client.complete("sys", "user")
+
+
 def test_groq_complete_falls_back_to_a_real_second_provider_on_error(monkeypatch):
     # Real finding 2026-10-17: a second Groq key under the same account
     # shares the same daily token quota - not real isolation. Gemini is a
