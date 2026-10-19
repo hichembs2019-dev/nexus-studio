@@ -80,7 +80,16 @@ class RealFalVideoClient(FalVideoClient):
         deadline = time.monotonic() + 600
         while time.monotonic() < deadline:
             status_resp = httpx.get(status_url, headers=headers, timeout=30)
-            status_resp.raise_for_status()
+            if status_resp.status_code >= 400:
+                # Real finding, 2026-10-19: the first real run past the
+                # submit step hit a real 422 here, and httpx's default
+                # raise_for_status() message carries only the status line
+                # and URL - never the response body, which is the one
+                # thing that could have said WHY fal.ai rejected it. Every
+                # real failure point in this client now reports the real
+                # body, matching the submit error below, so a repeat
+                # failure is diagnosable instead of another guess.
+                raise FalVideoError(f"fal.ai status check failed ({status_resp.status_code}): {status_resp.text[:500]}")
             status = status_resp.json().get("status")
             if status == "COMPLETED":
                 break
@@ -91,7 +100,8 @@ class RealFalVideoClient(FalVideoClient):
             raise FalVideoError(f"fal.ai job did not complete within 600s (request_id={payload.get('request_id')})")
 
         result_resp = httpx.get(response_url, headers=headers, timeout=30)
-        result_resp.raise_for_status()
+        if result_resp.status_code >= 400:
+            raise FalVideoError(f"fal.ai result fetch failed ({result_resp.status_code}): {result_resp.text[:500]}")
         result = result_resp.json()
         try:
             video_url = result["video"]["url"]

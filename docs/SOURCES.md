@@ -693,6 +693,21 @@ Two real, separate bugs, found together:
 
 Both real, confirmed by the real traceback above, not guessed - this project's own standing rule. Not independently proven by a redeploy yet; that is the real next step, with the explicit instruction to verify `assets/placeholder_characters/` actually exists inside the rebuilt container **before** pressing Approve again, so a second real mistake does not cost another two hours of silence.
 
+**Both fixes above confirmed live, both worked.** `assets/placeholder_characters/` had all six real PNG files inside the rebuilt container (`docker compose exec ... ls`), and the real failure this time reached Telegram directly and instantly, exactly as designed:
+
+```
+❌ فشل التوليد الحقيقي: Client error: '422 Unprocessable Entity' for url
+'https://queue.fal.run/fal-ai/wan/requests/01a1560a-bd25-76d0-8f4f-9d3c3f627f79'
+```
+
+## A real, new fal.ai failure, and a real diagnostic gap it found (2026-10-19)
+
+This is the first real run to ever get past `RealFalVideoClient`'s submit step - every earlier real attempt (see "Real end-to-end run, 2026-10-18" above) was blocked by a `403 Exhausted balance` on submit itself, so the polling leg (`GET status_url`, `GET response_url`) had never been exercised live before this. It failed with a real `422 Unprocessable Entity` on the status check.
+
+**Could not determine the real root cause** - and did not guess one. `status_resp.raise_for_status()` (httpx's default) only reports the status line and URL in its exception message, never the response body, which is the one place fal.ai would have said WHY. The same gap existed on the result fetch. Fixed: both now check `status_code >= 400` directly and raise `FalVideoError` carrying the real response body (`status_resp.text[:500]`), matching the pattern the submit step already used - so a repeat of this exact failure is diagnosable from the owner's own Telegram message next time, not another guess. Covered by `tests/test_fal_video_client.py::test_generate_speech_to_video_raises_with_the_real_body_on_a_failed_status_check` (+1 more for the result fetch), mutation-tested (reverted, confirmed both fail on the real `RuntimeError: status 500`/`422` from the old generic `raise_for_status()`, restored, confirmed green).
+
+**The 422's actual cause is still unknown** and will only be known from the real message the owner's next real attempt now surfaces directly in Telegram - stated plainly rather than guessed at (a malformed `image_url`/`audio_url` data URI, a fal.ai-side validation rule not documented on the model's public page, or something else entirely are all equally unconfirmed possibilities until that real text is read).
+
 ### What is NOT built yet (stated plainly, not implied)
 
 - **Multi-platform publishing** (TikTok/Instagram/X/Snapchat/Twitch/Kick)

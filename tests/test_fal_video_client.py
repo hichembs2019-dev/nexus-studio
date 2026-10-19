@@ -142,6 +142,62 @@ def test_generate_speech_to_video_raises_on_a_non_2xx_submit(monkeypatch):
         client.generate_speech_to_video(prompt="p", image_data_uri="i", audio_data_uri="a")
 
 
+def test_generate_speech_to_video_raises_with_the_real_body_on_a_failed_status_check(monkeypatch):
+    # Real finding, 2026-10-19: the first real run past submit hit a real
+    # 422 on the status check, and httpx's default raise_for_status()
+    # message carries only the status line and URL - never the response
+    # body, which is the one thing that could say WHY. A test that only
+    # checks a FalVideoError was raised (not that it carries the real
+    # body) would still pass with that diagnostic information thrown away.
+    def fake_post(url, *, headers, json, timeout):
+        return _FakeResponse(
+            status_code=200,
+            json_data={
+                "request_id": "req-1",
+                "status_url": "https://queue.fal.run/x/requests/req-1",
+                "response_url": "https://queue.fal.run/x/requests/req-1",
+            },
+        )
+
+    def fake_get(url, *, headers=None, timeout=30):
+        return _FakeResponse(status_code=422, text='{"detail": "real reason from fal.ai"}')
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    client = RealFalVideoClient("key")
+    with pytest.raises(FalVideoError, match="real reason from fal.ai"):
+        client.generate_speech_to_video(prompt="p", image_data_uri="i", audio_data_uri="a")
+
+
+def test_generate_speech_to_video_raises_with_the_real_body_on_a_failed_result_fetch(monkeypatch):
+    def fake_post(url, *, headers, json, timeout):
+        return _FakeResponse(
+            status_code=200,
+            json_data={
+                "request_id": "req-1",
+                "status_url": "https://queue.fal.run/x/requests/req-1/status",
+                "response_url": "https://queue.fal.run/x/requests/req-1",
+            },
+        )
+
+    def fake_get(url, *, headers=None, timeout=30):
+        if url.endswith("/status"):
+            return _FakeResponse(status_code=200, json_data={"status": "COMPLETED"})
+        return _FakeResponse(status_code=500, text="internal error from fal.ai")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+
+    client = RealFalVideoClient("key")
+    with pytest.raises(FalVideoError, match="internal error from fal.ai"):
+        client.generate_speech_to_video(prompt="p", image_data_uri="i", audio_data_uri="a")
+
+
 def test_mock_fal_video_client_records_calls_and_returns_scripted_bytes():
     mock = MockFalVideoClient(scripted_bytes=b"scripted-clip")
 
