@@ -177,3 +177,61 @@ def test_write_dialogue_screenplay_rejects_zero_line_count():
 
     with pytest.raises(DialogueWriterError, match="line_count"):
         writer.write_dialogue_screenplay("T", "p", line_count=0)
+
+
+def test_write_complete_dialogue_screenplay_requires_exactly_one_line_per_real_quoted_moment():
+    # Real finding, 2026-10-19 ("يجب ان ينفذ كل حرف و كل كلمة كتبتها
+    # بدون حذف او نقصان ... أنا من أدفع المال و أنا حر ماذا أريد" - every
+    # letter and word I wrote must be used, no deletion, no shortening -
+    # I'm the one paying, I'm free to choose what I want): a mode with NO
+    # model-chosen line_count and NO model-chosen selection of which
+    # quotes to keep - the real count of quoted moments in the premise
+    # drives everything, counted by this code, not guessed by the model.
+    premise = 'قال: «مرحبا يا فوزية» فقالت: «أهلا بك» ثم قال: «كيف حالك اليوم؟»'
+    cast_reply = _cast_reply(("الرجل", "male", "middle"), ("فوزية", "female", "middle"))
+    lines_reply = json.dumps(
+        [
+            {"character": "الرجل", "line": "مرحبا يا فوزية", "action": "smiling"},
+            {"character": "فوزية", "line": "أهلا بك", "action": "smiling back"},
+            {"character": "الرجل", "line": "كيف حالك اليوم؟", "action": "leaning in"},
+        ]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    screenplay = writer.write_complete_dialogue_screenplay("T", premise)
+
+    assert len(screenplay.lines) == 3
+    assert [l.line for l in screenplay.lines] == ["مرحبا يا فوزية", "أهلا بك", "كيف حالك اليوم؟"]
+    # the lines prompt must have told the model the real, counted number - 3, not guessed
+    assert "exactly 3" in reasoning.calls[1][0]
+
+
+def test_write_complete_dialogue_screenplay_raises_if_the_model_drops_a_quoted_moment():
+    premise = 'قال: «الأولى» وقال: «الثانية» وقال: «الثالثة»'
+    cast_reply = _cast_reply(("الرجل", "male", "middle"))
+    lines_reply = json.dumps(
+        [
+            {"character": "الرجل", "line": "الأولى", "action": ""},
+            {"character": "الرجل", "line": "الثانية", "action": ""},
+        ]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="needed 3"):
+        writer.write_complete_dialogue_screenplay("T", premise)
+
+
+def test_write_complete_dialogue_screenplay_prompt_forbids_narrator_and_demands_verbatim_copy():
+    premise = 'قال: «مرحبا»'
+    cast_reply = _cast_reply(("الرجل", "male", "middle"))
+    lines_reply = json.dumps([{"character": "الرجل", "line": "مرحبا", "action": ""}])
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    writer.write_complete_dialogue_screenplay("T", premise)
+
+    lines_system_prompt = reasoning.calls[1][0]
+    assert "narrator" in lines_system_prompt.lower()
+    assert "copied EXACTLY" in lines_system_prompt

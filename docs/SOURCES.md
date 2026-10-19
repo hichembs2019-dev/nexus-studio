@@ -666,6 +666,16 @@ With all three fixes above redeployed, the owner's next real `/new 60` on the fu
 
 Same caveat as the fixes above: the prompt change is confirmed to reach the model; whether the model reliably picks the right lines on a real run with a real quote-dense story is the owner's next real test to make, not something proven here.
 
+## `/full` - a second mode with no selection at all (2026-10-19)
+
+Owner, immediately after the fix above: "بل تعطيه أمر ليصنع ما كتبت له بالظبط كلمة بكلمة و لا يخرج عنها و تكون كاملة بلا نقصان و لا حذف و لا تغيير. أنا من أدفع المال و أنا حر ماذا أريد. لا يجب أن تفرض عليا أنت أو هو ما تريدان" (give it an instruction to produce exactly what I wrote, word for word, not deviating from it, complete, with no shortening, no deletion, no alteration - I'm the one paying, I'm free to choose what I want - neither you nor it get to impose what you two want). "Prioritize the essential lines" (above) is still a selection by the model - this instruction explicitly rejects that tradeoff when cost isn't the owner's concern for a given request.
+
+Built as a genuinely different mode, not a bigger `line_count`: `DialogueWriterAgent.write_complete_dialogue_screenplay(title, premise)` never estimates or asks the model to estimate a count - it counts the real quoted dialogue moments in the premise itself with a plain regex (`«guillemets»`, `"straight quotes"`, `"curly quotes"`), then requires the model to return exactly that many lines, one per quoted moment, in order, copied verbatim, with no omission, merging, or addition - and raises `DialogueWriterError` if the model returns fewer than that real count, the same enforcement `write_dialogue_screenplay` already has for its own estimate. Reachable from the bot as `/full` (`BotConversation.handle_full`, wired in `runner.py`) - no seconds argument, same accumulated-text and approve/cancel flow as `/new`. The owner pays for however many real lines that turns out to be for their actual story - shown in the same cost estimate before approval - which is the explicit tradeoff this instruction asks for, not a decision this code makes for them.
+
+Covered by `tests/test_dialogue_writer.py::test_write_complete_dialogue_screenplay_requires_exactly_one_line_per_real_quoted_moment` (+ 2 more) and `tests/test_bot_conversation.py::test_full_builds_a_screenplay_with_no_duration_and_one_line_per_real_quote` (+ 2 more), mutation-tested together (reverted both files, confirmed all 6 new tests fail - 3 with `AttributeError: no attribute 'handle_full'`, 3 inside `DialogueWriterAgent` - restored, confirmed green).
+
+Same caveat as every prompt-level fix above: proven to reach the model and to enforce the right COUNT; whether the model's own copy of each quoted line is byte-for-byte verbatim on a real run is the owner's next real test, same as always.
+
 ### What is NOT built yet (stated plainly, not implied)
 
 - **Multi-platform publishing** (TikTok/Instagram/X/Snapchat/Twitch/Kick)

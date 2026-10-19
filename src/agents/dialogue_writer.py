@@ -72,10 +72,29 @@ more real quoted moments than {line_count} allows, keep the ones the
 story's events actually depend on (what starts the conflict, each real
 turning point, how it ends) over ones that are merely additional or
 repeat a point already made.
+
+Fourth real finding, same story, same day ("يجب ان ينفذ كل حرف و كل
+كلمة كتبتها بدون حذف او نقصان ... أنا من أدفع المال و أنا حر ماذا
+أريد" - every letter and word I wrote must be used, without deletion or
+shortening - I'm the one paying, I'm free to choose what I want):
+"prioritize the essential lines" (the third finding, above) is still a
+selection - the owner explicitly does not want the model choosing AT
+ALL when cost is not the owner's concern for that request.
+`write_complete_dialogue_screenplay()` is a second, separate real mode:
+line_count is never estimated from a target duration here - it is the
+REAL number of quoted dialogue moments in the premise, counted by this
+code with a plain regex over the premise text itself (`«guillemets»` or
+"quotes"), not guessed or asked of the model. The model is then told
+exactly that many lines are required, one per quoted moment, in order,
+verbatim - no choosing, no dropping, no merging. The owner pays for
+however many real lines that turns out to be (shown in the usual cost
+estimate before approval) - that tradeoff is explicitly theirs to make,
+not this code's to make for them.
 """
 from __future__ import annotations
 
 import json
+import re
 
 from src.agents._text_parsing import parse_json_object_array
 from src.integrations.reasoning_client import AgentReasoningClient
@@ -109,6 +128,26 @@ Rules:
 - NEVER write a "narrator" line that summarizes, recounts, or describes past events in past tense (e.g. "So I divorced her and stopped listening to her") - every single line must be something a character says TO another character, in the moment, inside a real scene. If the premise is first-person memoir prose, DRAMATIZE it: pick the real scenes it already describes with quoted dialogue, and have the real people in them speak directly to each other there - do not have the narrator summarize what happened between those scenes.
 - If the premise contains more real quoted moments than {line_count} lines can hold, you MUST choose which ones to keep - and the choice is not arbitrary: keep the lines the story's actual events depend on (what starts the conflict, each real turning point, how it ends) over lines that are merely additional detail or repeat a point another kept line already makes. Dropping the line that explains WHY something central happens (why a divorce, a decision, an estrangement) in favor of two lines from a less essential moment is wrong even if the total count is still correct."""
 
+_COMPLETE_LINES_SYSTEM_PROMPT = """You are transcribing a real story's own quoted dialogue into a shot list - not summarizing, not selecting, not inventing.
+
+Rules:
+- Output ONLY a JSON array of objects, nothing else - no markdown fences, no commentary.
+- The premise contains exactly {line_count} directly quoted dialogue moments (text inside «guillemets» or "quotes"). Output EXACTLY {line_count} array elements, one per quoted moment, IN THE SAME ORDER they appear in the premise. Do not skip any, do not merge two into one, do not add a line that is not one of the premise's own quoted moments.
+- Each object has exactly three keys:
+  - "character": one of these EXACT names (same spelling): {cast}
+  - "line": the quoted text for that moment, copied EXACTLY as written in the premise - not a single word paraphrased, shortened, or altered.
+  - "action": a short, visual-only English stage direction for this moment (facial expression, gesture, what they're doing) - NEVER repeat or translate the spoken line itself here.
+- NEVER create or use a "narrator" character - every quoted moment belongs to the real person who said it in the premise."""
+
+# Matches an Arabic guillemet quote («...») or a straight/curly double-quote
+# ("..."), non-greedy so two separate quotes on one line count as two
+# moments, not one spanning both.
+_QUOTED_MOMENT_PATTERN = re.compile(r"«[^»]+»|\"[^\"]+\"|“[^”]+”")
+
+
+def _count_quoted_moments(premise: str) -> int:
+    return len(_QUOTED_MOMENT_PATTERN.findall(premise))
+
 
 class DialogueWriterError(Exception):
     pass
@@ -121,12 +160,18 @@ class DialogueWriterAgent:
     def write_dialogue_screenplay(self, title: str, premise: str, line_count: int) -> DialogueScreenplay:
         if line_count < 1:
             raise DialogueWriterError(f"line_count must be >= 1, got {line_count}")
+        return self._write(title, premise, line_count, _LINES_SYSTEM_PROMPT)
 
+    def write_complete_dialogue_screenplay(self, title: str, premise: str) -> DialogueScreenplay:
+        line_count = max(1, _count_quoted_moments(premise))
+        return self._write(title, premise, line_count, _COMPLETE_LINES_SYSTEM_PROMPT)
+
+    def _write(self, title: str, premise: str, line_count: int, lines_system_prompt_template: str) -> DialogueScreenplay:
         cast_raw = self._reasoning_client.complete(_CAST_SYSTEM_PROMPT, premise)
         cast = self._parse_cast(cast_raw)
         cast_names = [c["name"] for c in cast]
 
-        lines_system_prompt = _LINES_SYSTEM_PROMPT.format(line_count=line_count, cast=", ".join(cast_names))
+        lines_system_prompt = lines_system_prompt_template.format(line_count=line_count, cast=", ".join(cast_names))
         lines_raw = self._reasoning_client.complete(lines_system_prompt, premise)
         parsed_lines = parse_json_object_array(
             lines_raw, ("character", "line", "action"), error_cls=DialogueWriterError

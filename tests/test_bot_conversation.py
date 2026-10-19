@@ -102,6 +102,44 @@ def test_cancel_clears_pending_text_too():
     assert "الاستخدام" in reply.text
 
 
+def test_full_builds_a_screenplay_with_no_duration_and_one_line_per_real_quote():
+    # Owner's instruction, 2026-10-19 ("يجب ان ينفذ كل حرف و كل كلمة
+    # كتبتها بدون حذف او نقصان" - every letter and word must be used, no
+    # deletion, no shortening): /full has no seconds argument and never
+    # estimates a line_count - it uses exactly as many lines as the real
+    # story has quoted moments.
+    premise = 'قال: «مرحبا يا فوزية» فقالت: «أهلا بك»'
+    cast = _cast_reply(("الرجل", "male", "middle"), ("فوزية", "female", "middle"))
+    lines = _lines_reply(("الرجل", "مرحبا يا فوزية", ""), ("فوزية", "أهلا بك", ""))
+    conversation, _ = _conversation([cast, lines])
+
+    reply = conversation.handle_full("chat1", premise)
+
+    assert "مرحبا يا فوزية" in reply.text
+    assert "أهلا بك" in reply.text
+    assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
+
+
+def test_full_uses_accumulated_plain_text_when_no_args_given():
+    premise = 'قال: «مرحبا يا فوزية» فقالت: «أهلا بك»'
+    cast = _cast_reply(("الرجل", "male", "middle"), ("فوزية", "female", "middle"))
+    lines = _lines_reply(("الرجل", "مرحبا يا فوزية", ""), ("فوزية", "أهلا بك", ""))
+    conversation, _ = _conversation([cast, lines])
+
+    conversation.handle_plain_text("chat1", premise)
+    reply = conversation.handle_full("chat1", "")
+
+    assert "مرحبا يا فوزية" in reply.text
+
+
+def test_full_with_no_text_at_all_asks_for_the_story_without_calling_the_writer():
+    conversation, _ = _conversation([])
+
+    reply = conversation.handle_full("chat1", "   ")
+
+    assert "الاستخدام" in reply.text
+
+
 def test_edit_updates_the_named_line_and_resends_the_screenplay():
     cast = _cast_reply(("فوزية", "female", "middle"))
     lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))

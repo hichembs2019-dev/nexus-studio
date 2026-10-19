@@ -35,6 +35,20 @@ order it arrives; `/new` with no premise of its own uses exactly that
 accumulated text, unmodified - never summarized, never trimmed - so a
 long real story reaches DialogueWriterAgent complete regardless of how
 many pieces Telegram split it into.
+
+Owner's instruction, 2026-10-19 ("يجب ان ينفذ كل حرف و كل كلمة كتبتها
+بدون حذف او نقصان ... أنا من أدفع المال و أنا حر ماذا أريد" - every
+letter and word I wrote must be used, no deletion, no shortening - I'm
+the one paying, I'm free to choose what I want): `/new [seconds]` still
+picks a line_count from a target duration, which can mean the writer
+has to choose which quoted moments to keep over others - acceptable
+when the owner wants a short, cheap preview, but not what this
+instruction asks for. `/full` is a separate command for exactly that
+case: no duration, no estimate, no choosing - it drives
+`write_complete_dialogue_screenplay()`, which uses every real quoted
+moment in the story, however many that turns out to be, and the owner
+pays for exactly that - shown in the same cost estimate before approval,
+same as `/new`.
 """
 from __future__ import annotations
 
@@ -109,6 +123,24 @@ class BotConversation:
         title = premise[:50]
         line_count = max(2, round(target_seconds / ESTIMATED_SECONDS_PER_LINE))
         screenplay = self._dialogue_writer.write_dialogue_screenplay(title, premise, line_count)
+        state.screenplay = screenplay
+        state.pending_text = ""
+        return BotReply(text=self._format_screenplay(screenplay), buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
+
+    def handle_full(self, chat_id: str, args_text: str) -> BotReply:
+        args_text = args_text.strip()
+        state = self._states.setdefault(chat_id, _ChatState())
+
+        # Owner's instruction, 2026-10-19: no duration, no estimate, no
+        # choosing which quoted moments to keep - every one of them, in
+        # order, verbatim, however many lines that turns out to be.
+        premise = f"{state.pending_text}\n{args_text}".strip() if state.pending_text else args_text
+
+        if not premise:
+            return BotReply(text="الاستخدام: أرسل قصتك كاملة كرسالة عادية (يمكن أن تكون طويلة وتنقسم لعدة رسائل)، ثم أرسل /full لبناء السيناريو من كل كلمة فيها بدون حذف.")
+
+        title = premise[:50]
+        screenplay = self._dialogue_writer.write_complete_dialogue_screenplay(title, premise)
         state.screenplay = screenplay
         state.pending_text = ""
         return BotReply(text=self._format_screenplay(screenplay), buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])

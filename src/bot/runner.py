@@ -61,6 +61,11 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         reply = conversation.handle_new(chat_id, " ".join(context.args))
         await _send_reply(chat_id, context, reply)
 
+    async def _full(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = str(update.effective_chat.id)
+        reply = conversation.handle_full(chat_id, " ".join(context.args))
+        await _send_reply(chat_id, context, reply)
+
     async def _text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # Real finding, 2026-10-19: Telegram's own client auto-splits an
         # outgoing message over ~4096 characters into several separate
@@ -103,6 +108,7 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
 
     application = Application.builder().token(bot_token).build()
     application.add_handler(CommandHandler("new", _new))
+    application.add_handler(CommandHandler("full", _full))
     application.add_handler(CommandHandler("edit", _edit))
     application.add_handler(CommandHandler("cancel", _cancel))
     application.add_handler(CallbackQueryHandler(_button))
