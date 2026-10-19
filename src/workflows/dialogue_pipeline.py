@@ -68,7 +68,7 @@ class DialoguePipeline:
         tts: TTSClient,
         output_dir: str,
         *,
-        tts_lang: str = "ar-TN",
+        tts_lang: str = "ar-SY",
         resolution: str = "480p",
     ):
         self._fal_video = fal_video

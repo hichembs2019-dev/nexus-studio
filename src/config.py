@@ -77,7 +77,13 @@ class Settings:
             azure_speech_key=os.environ.get("AZURE_SPEECH_KEY", ""),
             azure_speech_region=os.environ.get("AZURE_SPEECH_REGION", ""),
             azure_tts_voice=os.environ.get("AZURE_TTS_VOICE", "ar-TN-HediNeural"),
-            azure_tts_lang=os.environ.get("AZURE_TTS_LANG", "ar-TN"),
+            # Owner's instruction, 2026-10-19: Syrian ("neutral/white")
+            # Arabic, widely understood across North Africa, the same
+            # dialect used dubbing Turkish series - not Tunisian, which
+            # the live DialoguePipeline path actually uses this default
+            # for (see character_photos.py; azure_tts_voice above is the
+            # OLD narration pipeline's own default and is untouched).
+            azure_tts_lang=os.environ.get("AZURE_TTS_LANG", "ar-SY"),
             fal_key=os.environ.get("FAL_KEY", ""),
             output_dir=os.environ.get("OUTPUT_DIR", "./output"),
         )

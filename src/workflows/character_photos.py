@@ -11,9 +11,17 @@ this project itself (src/workflows/generate_placeholder_avatars.py), not
 real people - no likeness/copyright question to verify, unlike a
 real-person stock photo would raise.
 
-Voices: `ar-TN-ReemNeural` (female) and `ar-TN-HediNeural` (male) are
-both real, live-verified Tunisian Arabic Azure voices for this project's
-own subscription (docs/SOURCES.md "Azure TTS") - not a guess.
+Owner's instruction, 2026-10-19 ("اللهجة السورية المستخدمة في الدبلجة
+كانت بيضاء ومفهومة جداً لجميع سكان شمال إفريقيا" - the Syrian dialect
+used in [Turkish series] dubbing was "neutral" and very understandable
+across all of North Africa): switched from Tunisian to Syrian voices for
+exactly this reason - wider reach across the whole Arabic-speaking
+audience this project is meant to publish to, not just Tunisia.
+`ar-SY-AmanyNeural` (female) and `ar-SY-LaithNeural` (male) are both
+real, live-verified Syrian Arabic Azure voices, Status "GA", confirmed
+the same way the Tunisian ones were (a real `GET .../voices/list` against
+this project's own Azure resource, docs/SOURCES.md "Language and visual
+style") - not a guess, and not assumed from the general region table.
 """
 from __future__ import annotations
 
@@ -25,8 +33,8 @@ _VALID_GENDERS = ("male", "female")
 _VALID_AGE_GROUPS = ("young", "middle", "older")
 
 _VOICE_BY_GENDER = {
-    "male": "ar-TN-HediNeural",
-    "female": "ar-TN-ReemNeural",
+    "male": "ar-SY-LaithNeural",
+    "female": "ar-SY-AmanyNeural",
 }
 
 

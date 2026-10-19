@@ -60,7 +60,7 @@ def test_produce_single_line_calls_tts_then_fal_with_data_uris_and_saves_the_cli
 
     produced = pipeline.produce(screenplay)
 
-    assert tts.calls == [("العشاء جاهز", "ar-TN-HediNeural", "ar-TN")]
+    assert tts.calls == [("العشاء جاهز", "ar-TN-HediNeural", "ar-SY")]
     assert len(fal_video.calls) == 1
     call = fal_video.calls[0]
     assert call["prompt"] == "smiling, setting the table" + CINEMATIC_STYLE_SUFFIX

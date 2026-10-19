@@ -91,7 +91,7 @@ class Character:
 
     name: str
     reference_image_path: str
-    voice: str = "ar-TN-HediNeural"
+    voice: str = "ar-SY-LaithNeural"
 
 
 @dataclass
