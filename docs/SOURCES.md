@@ -816,3 +816,18 @@ Process exited with status 1
 ```
 
 Not a code defect - a real gap in `deploy.yml` itself: nothing stopped two deploys from running at once, and Docker's own rename-during-recreate step collided when they did. Fixed with a `concurrency: {group: deploy-droplet, cancel-in-progress: false}` block - a second run now queues behind the first instead of racing it (queuing rather than cancelling, specifically, because a cancelled mid-deploy run could land between `docker compose up -d --build` and the `docker compose logs` read that is this workflow's whole reason for existing, silently losing the evidence a real failure needs).
+
+## Token leak - closed (2026-10-20)
+
+Owner rotated by creating a new bot (`t.me/Studio_Nexus_bot`, new token) via @BotFather and **deleting the old leaked bot entirely** (confirmed by the owner: "صار delete للقديم") - stronger than a plain revoke, since a deleted bot cannot be un-deleted back into a working state by anyone who still has the old token.
+
+New token applied on the real droplet via a one-line `sed` replace of `TELEGRAM_BOT_TOKEN` in `.env` (no manual `nano` edit needed), followed by `docker compose up -d --build`. Real console output, photographed by the owner:
+
+```
+nexus-studio-1  | INFO:nexus_studio.main:nexus-studio bot starting (long-polling)
+nexus-studio-1  | INFO:telegram.ext.Application:Application started
+```
+
+No `getMe`/`deleteWebhook` URL line appears - confirming the `httpx` logging fix above holds on the real deployed container, not only in the test suite. `Application started` with no earlier `Unauthorized`/auth error also confirms the new token itself is valid - python-telegram-bot's `run_polling()` calls `getMe` during startup and would have raised before this line if the token were wrong.
+
+Full timeline of this incident, real evidence at every step: leak found reading a real CI log → root-caused to `httpx` INFO logging → fixed and mutation-tested → fix verified live on first deploy (no token line) → owner deleted the leaked bot and created a replacement → new token deployed and verified live, bot running.
