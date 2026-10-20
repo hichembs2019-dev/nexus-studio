@@ -880,3 +880,13 @@ Added: `Settings.max_episode_cost_usd` (env `MAX_EPISODE_COST_USD`, default `10.
 The ceiling is checked *before*, not after, a line - a line's real cost is only known once fal.ai has actually run it, so the guard cannot predict and block the exact line that would cross the ceiling; it guarantees no *further* line is attempted once already over it, capping runaway spend to at most one line's cost past the configured limit rather than leaving it unbounded.
 
 Covered by `tests/test_dialogue_pipeline.py::test_produce_stops_spending_once_the_hard_cost_ceiling_is_reached` (asserts the real fal.ai client is called exactly once, not three times, against a 3-line screenplay with a ceiling below one line's cost) and `tests/test_bot_conversation.py::test_format_produced_reports_lines_skipped_by_the_hard_cost_ceiling`. Mutation-tested the same way; full suite green at 128/128.
+
+## Delivery after production was itself unprotected (2026-10-20)
+
+Found by code review following the owner's explicit demand to close every remaining way real money could be spent for nothing ("افعل كل شيء لكي لا نخسر المال ... اي شيء يخسر المال بدون فائدة لا"): `_produce_and_notify` in `runner.py` only wrapped the `dialogue_pipeline.produce()` call itself in a `try/except` - building the reply (`format_produced`) and actually sending the video(s) to the owner (`_send_reply`, which calls Telegram's `send_video`) ran completely unprotected, AFTER real money had already been spent and real clips already existed.
+
+If `send_video` ever raised for any reason - Telegram's own file-size limit (~50MB on the Bot API), a network error, anything - the background task would simply die with no message sent at all: the exact "owner gets total silence" failure class the 2026-10-19 fix (`_produce_and_notify`'s own try/except around `produce()`) exists to prevent, reachable again from a different point, and specifically worse here because it would happen *after* real spend rather than before it.
+
+Fixed: `format_produced()` + `_send_reply()` are now inside their own `try/except`. On failure, the owner is told plainly that production succeeded (with the real cost and clip count) but delivery failed, with the real exception - never silence.
+
+Not covered by an automated test - `runner.py`'s own docstring states this file is deliberately kept untestable-without-a-live-bot (same split `nexus-commerce`'s `telegram_listener.py` uses), consistent with how every other fix in this file has been verified (syntax check + the full test suite staying green, since nothing in it imports `runner.py`). Verified by `python3 -c "import ast; ast.parse(...)"` and the full 128-test suite staying green (unaffected, as expected - no test exercises this file).

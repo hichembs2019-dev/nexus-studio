@@ -115,8 +115,29 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
                 text=f"❌ فشل التوليد الحقيقي: {exc}\n\nلم يكتمل أي مقطع - تحقق من رصيد fal.ai الحقيقي قبل إعادة المحاولة.",
             )
             return
-        reply = conversation.format_produced(chat_id, produced)
-        await _send_reply(chat_id, context, reply)
+        # Real gap found by code review, 2026-10-20 (the owner's own
+        # standing demand, "افعل كل شيء لكي لا نخسر المال" - do everything
+        # so we don't lose money): production itself was already protected
+        # above, but everything AFTER it - building the reply and actually
+        # sending the video(s) to Telegram - ran with no error handling at
+        # all. If send_video ever raises (Telegram's own ~50MB file-size
+        # limit, a network error, anything) after real money was already
+        # spent and real clips already exist, the task just dies silently -
+        # the exact "owner gets total silence for hours" failure class the
+        # 2026-10-19 fix above exists to prevent, reachable again from a
+        # different point, and now specifically AFTER real spend instead
+        # of before it.
+        try:
+            reply = conversation.format_produced(chat_id, produced)
+            await _send_reply(chat_id, context, reply)
+        except Exception as exc:
+            await context.bot.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"⚠️ اكتمل التوليد الحقيقي (التكلفة ${produced.total_cost_usd:.3f}، "
+                    f"{len(produced.clips)} مقطع) لكن فشل إرسال الفيديو إليك: {exc}"
+                ),
+            )
 
     async def _new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = str(update.effective_chat.id)
