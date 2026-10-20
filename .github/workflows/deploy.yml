@@ -1,0 +1,34 @@
+name: Deploy to droplet
+
+# Owner's instruction, 2026-10-20 ("اريد ان استغنى عنك في التصليح و
+# الاصلاح و التحسين... و هل استغنى عنك للابد؟" - I want to not need you
+# for every fix/redeploy): this ends the manual copy-paste-into-the-
+# DigitalOcean-console deploy loop that every single fix tonight needed.
+# It does NOT write code fixes by itself - a real fix still needs to be
+# committed first, same as every commit in this repo's history. All this
+# does is run, automatically, the exact same commands the owner was
+# pasting by hand all night: git pull, docker compose up -d --build,
+# then print the post-deploy logs so a failure is visible in the GitHub
+# Actions run itself, not only discovered later from a silent bot.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy over SSH
+        uses: appleboy/ssh-action@v1.2.4
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/nexus-studio
+            git pull origin main
+            docker compose up -d --build nexus-studio
+            sleep 8
+            docker compose logs --tail=30 nexus-studio

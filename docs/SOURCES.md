@@ -744,6 +744,19 @@ All four covered by new tests (`tests/test_dialogue_writer.py::test_write_comple
 
 **Still not independently proven by an actual real run** - same standard as every fix in this file. Every fix above removes a specific, named risk found either by a real incident or by this review; none of them is a claim that the system is now bug-free.
 
+## Automatic deploy (CI/CD), 2026-10-20
+
+Owner's instruction ("اريد ان استغنى عنك... في التصليح و الاصلاح" - I want to stop needing you for every fix/redeploy): every single fix tonight needed the owner to manually copy a command, open the DigitalOcean browser console, and paste it. `.github/workflows/deploy.yml` ends exactly that one step - on every push to `main`, GitHub itself (not this sandbox, which has no outbound SSH - see "Real deployment" above) connects to the real droplet over SSH and runs the same `git pull && docker compose up -d --build nexus-studio` the owner was pasting by hand all night, then prints the post-deploy logs into the GitHub Actions run itself so a failure is visible there directly.
+
+Uses `appleboy/ssh-action@v1.2.4` - checked live, not guessed, against a real December 2025 dependency-bump record (a `web-php` project's own CI pinned it at that exact version); an earlier draft would have pinned an invented `v1.0.3`.
+
+**This does not remove the need for a real fix to be written and tested first** - stated plainly, since the owner's own next question was literally whether this replaces needing that at all. It only removes the manual deployment step after a fix already exists, is tested, and is pushed - the exact gap between "I pushed a fix" and "the owner's server is actually running it" that cost real back-and-forth tonight.
+
+**Setup still needed, not done yet** (requires the owner's real droplet and real GitHub repo settings, neither reachable from here without them):
+1. The real SSH *public* key (`github-actions-deploy-nexus-studio`, generated this session, ed25519) must be added to the droplet's `~/.ssh/authorized_keys` for the `root` user, via the real DigitalOcean console.
+2. Three real GitHub Actions repository secrets must be set (`Settings → Secrets and variables → Actions` on `hichembs2019-dev/nexus-studio`): `DEPLOY_HOST` (`159.89.22.193`), `DEPLOY_USER` (`root`), `DEPLOY_SSH_KEY` (the matching private key, generated this session, never committed to the repository).
+3. Not independently tested yet - the real proof is the next real push to `main` actually reaching the droplet without the owner touching a console.
+
 ### What is NOT built yet (stated plainly, not implied)
 
 - **Multi-platform publishing** (TikTok/Instagram/X/Snapchat/Twitch/Kick)
