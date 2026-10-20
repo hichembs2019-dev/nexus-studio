@@ -5,6 +5,7 @@ import json
 from src.agents.dialogue_writer import DialogueWriterAgent
 from src.agents.publisher import PublishingAgent
 from src.bot.conversation import ESTIMATED_SECONDS_PER_LINE, BotConversation, TELEGRAM_MESSAGE_LIMIT, split_for_telegram
+from src.integrations.fal_video_client import PRICE_PER_SECOND_USD
 from src.integrations.publishing_client import MockPublishingClient
 from src.integrations.reasoning_client import MockAgentReasoningClient
 from src.models import Character, DialogueLine, DialogueScreenplay, ProducedDialogueClip, ProducedDialogueEpisode
@@ -218,6 +219,59 @@ def test_edit_with_blank_lines_in_the_message_ignores_them():
 
     assert "fixed" in reply.text
     assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
+
+
+def test_caption_marks_a_line_as_on_screen_text_with_zero_estimated_cost():
+    # Owner's instruction, 2026-10-20 ("نحذف الام و يبقى حوارها مكتوب على
+    # الشاشة ... لكي نستحقظ على المال" - remove the mother as a speaking
+    # role, her dialogue stays written on screen, to save money):
+    # /caption flips a line to spoken=False, which DialoguePipeline then
+    # produces for real zero cost - the owner must see this reflected in
+    # the estimate BEFORE approving, not discover it only afterward.
+    cast = _cast_reply(("فوزية", "female", "middle"), ("جويدة", "female", "young"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("جويدة", "beat two", ""))
+    conversation, _ = _conversation([cast, lines])
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
+
+    reply = conversation.handle_caption("chat1", "2")
+
+    assert "نص على الشاشة" in reply.text
+    # Only line 1 (فوزية) is still spoken/billed - the estimate must drop
+    # to reflect just that one line, not both.
+    expected_cost = 1 * ESTIMATED_SECONDS_PER_LINE * PRICE_PER_SECOND_USD["480p"]
+    assert f"${expected_cost:.2f}" in reply.text
+    assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
+
+
+def test_caption_on_an_out_of_range_line_reports_it_clearly():
+    cast = _cast_reply(("فوزية", "female", "middle"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
+    conversation, _ = _conversation([cast, lines])
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
+
+    reply = conversation.handle_caption("chat1", "9")
+
+    assert "لم توجد هذه الأرقام" in reply.text
+    assert "9" in reply.text
+
+
+def test_caption_without_a_draft_tells_the_user_to_start_with_new():
+    conversation, _ = _conversation([])
+
+    reply = conversation.handle_caption("chat1", "1")
+
+    assert "/new" in reply.text
+
+
+def test_caption_with_no_numbers_shows_usage():
+    cast = _cast_reply(("فوزية", "female", "middle"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
+    conversation, _ = _conversation([cast, lines])
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
+
+    reply = conversation.handle_caption("chat1", "")
+
+    assert "/caption" in reply.text
 
 
 def test_approve_returns_the_exact_draft_screenplay_for_real_production():

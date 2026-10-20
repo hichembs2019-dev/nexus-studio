@@ -235,6 +235,47 @@ class BotConversation:
             reply_text += f"\n\n⚠️ لم توجد هذه الأرقام في المسودة الحالية (تحتوي على {len(state.screenplay.lines)} سطراً): {', '.join(str(n) for n in not_found)}"
         return BotReply(text=reply_text, buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
 
+    def handle_caption(self, chat_id: str, args_text: str) -> BotReply:
+        # Owner's instruction, 2026-10-20 ("نحذف الام و يبقى حوارها مكتوب
+        # على الشاشة ... لكي نستحقظ على المال" - remove the mother as a
+        # speaking role, her dialogue stays written on screen, to save
+        # money): marks specific line numbers as on-screen text instead
+        # of spoken/lip-synced - real zero cost for those lines
+        # (DialoguePipeline.produce() skips TTS and fal.ai entirely for
+        # any line with spoken=False). Same multi-number-per-message
+        # pattern as /edit, reusing the exact same freedom the owner
+        # insisted on there.
+        state = self._states.get(chat_id)
+        if state is None or state.screenplay is None:
+            return BotReply(text="لا توجد مسودة سيناريو بعد - ابدأ بـ /new.")
+
+        numbers: list[int] = []
+        for token in args_text.split():
+            if token.isdigit():
+                numbers.append(int(token))
+
+        if not numbers:
+            return BotReply(
+                text=(
+                    "الاستخدام: /caption <رقم السطر> [أرقام أخرى] - يجعل هذه الأسطر نصًا مكتوبًا "
+                    "على الشاشة بدل صوت ومقطع فيديو حقيقي، بتكلفة حقيقية صفر لها. مثلًا:\n"
+                    "/caption 3 7"
+                )
+            )
+
+        not_found: list[int] = []
+        for number in numbers:
+            matching = [l for l in state.screenplay.lines if l.index == number - 1]
+            if not matching:
+                not_found.append(number)
+                continue
+            matching[0].spoken = False
+
+        reply_text = self._format_screenplay(state.screenplay)
+        if not_found:
+            reply_text += f"\n\n⚠️ لم توجد هذه الأرقام في المسودة الحالية (تحتوي على {len(state.screenplay.lines)} سطراً): {', '.join(str(n) for n in not_found)}"
+        return BotReply(text=reply_text, buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
+
     def handle_cancel(self, chat_id: str) -> BotReply:
         self._states[chat_id] = _ChatState()
         return BotReply(text="تم إلغاء المسودة.")
@@ -350,9 +391,16 @@ class BotConversation:
             lines.append(f"- {c.name}")
         lines.append("")
         for l in screenplay.lines:
-            lines.append(f"{l.index + 1}. {l.character}: {l.line}")
+            # Owner's instruction, 2026-10-20: a line marked /caption must
+            # be visibly distinct here BEFORE approval - otherwise the
+            # owner has no way to confirm which lines will actually cost
+            # money and which will be free on-screen text.
+            marker = " (نص على الشاشة - بدون صوت، تكلفة $0)" if not l.spoken else ""
+            lines.append(f"{l.index + 1}. {l.character}: {l.line}{marker}")
         lines.append("")
-        est_cost = len(screenplay.lines) * ESTIMATED_SECONDS_PER_LINE * PRICE_PER_SECOND_USD["480p"]
+        spoken_count = sum(1 for l in screenplay.lines if l.spoken)
+        est_cost = spoken_count * ESTIMATED_SECONDS_PER_LINE * PRICE_PER_SECOND_USD["480p"]
         lines.append(f"(تكلفة تقديرية تقريبية: ${est_cost:.2f} - التكلفة الحقيقية تُحسب بعد التوليد الفعلي)")
         lines.append("لتعديل سطر أو عدة أسطر دفعة واحدة، كل تعديل في سطر منفصل:\n/edit\n<الرقم> <الحوار الجديد>\n<رقم آخر> <حوار آخر>")
+        lines.append("لجعل سطر (أو عدة أسطر) نصًا مكتوبًا على الشاشة بدل صوت حقيقي (بتكلفة $0): /caption <الرقم> [أرقام أخرى]")
         return "\n".join(lines)

@@ -39,6 +39,29 @@ CINEMATIC_STYLE_SUFFIX = ", cinematic lighting, warm color grading, emotional cl
 # never two different stories' characters sharing the same face.
 PORTRAIT_STYLE_SUFFIX = ", neutral friendly expression, looking directly at camera, soft studio lighting, plain neutral background, photorealistic, shot on a DSLR, sharp focus"
 
+# Owner's instruction, 2026-10-20 ("نحذف الام و يبقى حوارها مكتوب على
+# الشاشة... و كذلك نحذف الاب... لكي نستحقظ على المال" - remove the
+# mother [as a speaking role], her dialogue stays written on screen;
+# same for the father; to save money): a character.spoken=False line
+# costs nothing real at all - no TTS, no fal.ai speech-to-video - and is
+# rendered locally instead as on-screen text (Arabic, right-to-left,
+# properly shaped - verified live with a real test render using this
+# exact font before shipping) over a group photo of every captioned
+# character, built once from their already-resolved real portraits.
+#
+# Real constraint checked, not assumed: ffmpeg's drawtext filter needs
+# BOTH a font file with Arabic glyphs AND libfribidi (for correct
+# right-to-left reordering) to render Arabic text correctly at all - the
+# base python:3.12-slim image's `apt-get install ffmpeg` pulls in NO
+# fonts whatsoever. fonts-noto-core (a real Debian/Ubuntu package,
+# confirmed installable) ships NotoNaskhArabic-Regular.ttf, added to
+# Dockerfile alongside this change - without it this path would either
+# find no font at all or render Arabic as disconnected/wrong-order
+# glyphs.
+CAPTION_FONT_PATH = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"
+CAPTION_CHARS_PER_SECOND = 15.0
+CAPTION_MIN_SECONDS = 2.0
+
 
 class DialoguePipelineError(Exception):
     pass
@@ -133,6 +156,21 @@ class DialoguePipeline:
             if failure:
                 portrait_failures.append((character.name, failure))
 
+        # One shared group photo for every on-screen caption, built once
+        # (free - just an ffmpeg hstack of portraits already resolved
+        # above) from the real photos of every character who has at
+        # least one non-spoken line. None if no line uses spoken=False.
+        caption_character_names = sorted(
+            {l.character for l in screenplay.lines if not l.spoken},
+            key=lambda n: next(i for i, l in enumerate(screenplay.lines) if l.character == n),
+        )
+        caption_group_image: str | None = None
+        if caption_character_names:
+            caption_group_image = self._build_caption_group_image(
+                [resolved_photos.get(n, characters_by_name[n].reference_image_path) for n in caption_character_names],
+                slug,
+            )
+
         for line in screenplay.lines:
             if self._max_cost_usd is not None and spent_so_far >= self._max_cost_usd:
                 # The ceiling was already reached by an earlier real,
@@ -157,6 +195,21 @@ class DialoguePipeline:
                     f"{character.reference_image_path!r} does not exist on disk"
                 )
             photo_path = resolved_photos.get(character.name, character.reference_image_path)
+
+            if not line.spoken:
+                # Zero real money spent on this line at all - no TTS, no
+                # fal.ai call. A local ffmpeg failure here still lands in
+                # failed_lines like any other line, but never carries the
+                # "real money was spent" prefix below, because none was.
+                try:
+                    prefix = f"{slug}_line{line.index:03d}"
+                    duration = max(CAPTION_MIN_SECONDS, len(line.line) / CAPTION_CHARS_PER_SECOND)
+                    clip_path = os.path.join(self._output_dir, f"{prefix}.mp4")
+                    self._render_caption_clip(caption_group_image, line.line, clip_path, duration)
+                    clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=0.0))
+                except Exception as exc:
+                    failed_lines.append((line, str(exc)))
+                continue
 
             # Real finding, 2026-10-19: a real 22-line run paid for and
             # successfully generated ~15 real clips (fal.ai's own
@@ -261,6 +314,50 @@ class DialoguePipeline:
             return cache_path, PRICE_PER_MEGAPIXEL_USD, None
         except Exception as exc:
             return character.reference_image_path, 0.0, str(exc)
+
+    def _build_caption_group_image(self, photo_paths: list[str], slug: str) -> str:
+        """Built once per screenplay (not per caption line) - a real
+        ffmpeg hstack of every captioned character's own real portrait,
+        side by side. Pure local image work, zero real API cost."""
+        out_path = os.path.join(self._output_dir, f"{slug}_caption_group.jpg")
+        if os.path.isfile(out_path):
+            return out_path
+        if len(photo_paths) == 1:
+            cmd = ["ffmpeg", "-y", "-i", photo_paths[0], out_path]
+        else:
+            inputs: list[str] = []
+            for p in photo_paths:
+                inputs += ["-i", p]
+            cmd = [
+                "ffmpeg", "-y", *inputs,
+                "-filter_complex", f"hstack=inputs={len(photo_paths)}",
+                out_path,
+            ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg caption group image failed: {result.stderr[-2000:]}")
+        return out_path
+
+    def _render_caption_clip(self, group_image_path: str, text: str, out_path: str, duration: float) -> None:
+        # Arabic drawtext needs an explicit font FILE (not a family name)
+        # with real Arabic glyph coverage - verified live before shipping
+        # this (see CAPTION_FONT_PATH's own comment). A single quote or
+        # colon inside the line's own text would otherwise break out of
+        # drawtext's text='...' argument - escaped the same way ffmpeg's
+        # own docs show.
+        escaped = text.replace("\\", "\\\\").replace("'", "’").replace(":", "\\:")
+        drawtext = (
+            f"drawtext=fontfile={CAPTION_FONT_PATH}:text='{escaped}':fontcolor=white:fontsize=36:"
+            "box=1:boxcolor=black@0.6:boxborderw=20:x=(w-text_w)/2:y=h-th-60"
+        )
+        cmd = [
+            "ffmpeg", "-y", "-loop", "1", "-i", group_image_path,
+            "-vf", drawtext, "-t", f"{duration:.2f}",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", out_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise RuntimeError(f"ffmpeg caption render failed: {result.stderr[-2000:]}")
 
     def _stitch(self, clips: list[ProducedDialogueClip], slug: str) -> str:
         list_path = os.path.join(self._output_dir, f"{slug}_dialogue_concat_list.txt")

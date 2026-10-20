@@ -11,7 +11,15 @@ from src.integrations.fal_video_client import MockFalVideoClient
 from src.integrations.image_client import ImageGenerationError, MockImageClient, PRICE_PER_MEGAPIXEL_USD
 from src.integrations.tts_client import MockTTSClient
 from src.models import Character, DialogueLine, DialogueScreenplay
-from src.workflows.dialogue_pipeline import CINEMATIC_STYLE_SUFFIX, PORTRAIT_STYLE_SUFFIX, DialoguePipeline, DialoguePipelineError
+from src.workflows.dialogue_pipeline import (
+    CAPTION_FONT_PATH,
+    CINEMATIC_STYLE_SUFFIX,
+    PORTRAIT_STYLE_SUFFIX,
+    DialoguePipeline,
+    DialoguePipelineError,
+)
+
+_ARABIC_FONT_AVAILABLE = os.path.isfile(CAPTION_FONT_PATH)
 
 
 def _ref_image(path: str) -> None:
@@ -343,6 +351,89 @@ def test_produce_portrait_generation_respects_the_hard_cost_ceiling(tmp_path):
     pipeline.produce(screenplay)
 
     assert len(image_client.calls) == 1  # the second character's portrait was never attempted
+
+
+@pytest.mark.skipif(not _ARABIC_FONT_AVAILABLE, reason="fonts-noto-core not installed on this machine - Dockerfile installs it for the real deployment")
+def test_produce_renders_a_spoken_false_line_as_a_zero_cost_caption(tmp_path):
+    # Owner's instruction, 2026-10-20 ("نحذف الام و يبقى حوارها مكتوب على
+    # الشاشة ... لكي نستحقظ على المال" - remove the mother as a speaking
+    # role, her dialogue stays written on screen, to save money): a
+    # spoken=False line must cost nothing real at all (no TTS, no fal.ai
+    # call) and still produce a real playable clip - a test that only
+    # checks produce() doesn't crash would pass even if this silently
+    # fell back to generating a real (billed) clip anyway.
+    ref_path = str(tmp_path / "ref.jpg")
+    _ref_image(ref_path)
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    tts = MockTTSClient()
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path))
+    screenplay = DialogueScreenplay(
+        title="Dinner",
+        premise="p",
+        characters=[
+            Character(name="A", reference_image_path=ref_path),
+            Character(name="B", reference_image_path=ref_path),
+        ],
+        lines=[
+            DialogueLine(index=0, character="A", line="one", action="a1"),
+            DialogueLine(index=1, character="B", line="زوجتك لم تعد تحترمك", action="", spoken=False),
+        ],
+    )
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(fal_video.calls) == 1  # only the spoken line ever called fal.ai
+    assert len(tts.calls) == 1  # only the spoken line ever called TTS
+    assert len(produced.clips) == 2
+    caption_clip = next(c for c in produced.clips if c.line.index == 1)
+    assert caption_clip.cost_usd == 0.0
+    assert os.path.exists(caption_clip.local_path)
+    import subprocess as _sp
+    probe = _sp.run(
+        ["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "default=noprint_wrappers=1:nokey=1", caption_clip.local_path],
+        capture_output=True, text=True,
+    )
+    assert probe.returncode == 0
+    assert float(probe.stdout.strip()) >= 2.0  # CAPTION_MIN_SECONDS floor for a short line
+    assert produced.total_cost_usd == pytest.approx(0.10)  # only the one spoken line's real cost
+
+
+@pytest.mark.skipif(not _ARABIC_FONT_AVAILABLE, reason="fonts-noto-core not installed on this machine - Dockerfile installs it for the real deployment")
+def test_produce_reports_a_real_caption_rendering_failure_without_a_billed_prefix(tmp_path, monkeypatch):
+    # A spoken=False line that fails locally never spent real money, so
+    # it must never carry the "تم صرف مال حقيقي" prefix the spoken path
+    # uses for a billed-then-failed line.
+    ref_path = str(tmp_path / "ref.jpg")
+    _ref_image(ref_path)
+
+    pipeline = DialoguePipeline(MockFalVideoClient(), MockTTSClient(), str(tmp_path))
+    screenplay = DialogueScreenplay(
+        title="Dinner", premise="p",
+        characters=[Character(name="A", reference_image_path=ref_path)],
+        lines=[DialogueLine(index=0, character="A", line="نص", action="", spoken=False)],
+    )
+
+    real_run = subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "ffmpeg" and "drawtext" in " ".join(cmd):
+            class _Failed:
+                returncode = 1
+                stderr = "simulated real caption render failure"
+                stdout = ""
+            return _Failed()
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(produced.clips) == 0
+    assert len(produced.failed_lines) == 1
+    assert "تم صرف مال حقيقي" not in produced.failed_lines[0][1]
+    assert "simulated real caption render failure" in produced.failed_lines[0][1]
 
 
 def test_produce_rejects_a_line_whose_speaker_is_not_in_the_cast(tmp_path):

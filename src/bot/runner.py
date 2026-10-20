@@ -187,6 +187,11 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         reply = conversation.handle_edit(chat_id, args_text)
         await _send_reply(chat_id, context, reply)
 
+    async def _caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        chat_id = str(update.effective_chat.id)
+        reply = conversation.handle_caption(chat_id, " ".join(context.args))
+        await _send_reply(chat_id, context, reply)
+
     async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = str(update.effective_chat.id)
         reply = conversation.handle_cancel(chat_id)
@@ -227,6 +232,7 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
     application.add_handler(CommandHandler("new", _new))
     application.add_handler(CommandHandler("full", _full))
     application.add_handler(CommandHandler("edit", _edit))
+    application.add_handler(CommandHandler("caption", _caption))
     application.add_handler(CommandHandler("cancel", _cancel))
     application.add_handler(CallbackQueryHandler(_button))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _text))

@@ -119,6 +119,16 @@ class DialogueLine:
     character: str
     line: str
     action: str = ""
+    # Owner's instruction, 2026-10-20 ("نحذف الام و يبقى حوارها... مكتوب
+    # على الشاشة" - remove the mother [as a speaking role], her dialogue
+    # stays as on-screen text): a real, concrete way to cut cost on a line
+    # that doesn't need to be heard - spoken=False skips TTS and the real
+    # fal.ai speech-to-video call entirely (zero real cost) and renders
+    # the line as an on-screen caption instead (see
+    # dialogue_pipeline.py's _render_caption_clip). Defaults to True so
+    # every existing screenplay/line keeps producing a real spoken clip
+    # exactly as before.
+    spoken: bool = True
 
 
 @dataclass

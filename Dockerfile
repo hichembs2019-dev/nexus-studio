@@ -5,7 +5,17 @@ WORKDIR /app
 # ffmpeg is used for real, local voiceover merging (episode_pipeline.py
 # _attach_narration/_stitch_local) - without it every episode is produced
 # silent again even with AZURE_SPEECH_KEY set.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg && rm -rf /var/lib/apt/lists/*
+#
+# fonts-noto-core: a real, confirmed-installable Debian/Ubuntu package.
+# Added 2026-10-20 for on-screen caption lines (dialogue_pipeline.py's
+# spoken=False path, _render_caption_clip) - ffmpeg's own drawtext filter
+# needs an actual font FILE with Arabic glyph coverage, and this base
+# image's apt-get ffmpeg install pulls in no fonts at all. Without this,
+# Arabic captions would either find no font or render wrong/garbled -
+# verified live (a real rendered frame, properly shaped Arabic, checked
+# before this was added) that fonts-noto-core's NotoNaskhArabic-Regular.ttf
+# actually fixes this, not guessed.
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-noto-core && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
