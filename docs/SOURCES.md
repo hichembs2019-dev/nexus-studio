@@ -831,3 +831,28 @@ nexus-studio-1  | INFO:telegram.ext.Application:Application started
 No `getMe`/`deleteWebhook` URL line appears - confirming the `httpx` logging fix above holds on the real deployed container, not only in the test suite. `Application started` with no earlier `Unauthorized`/auth error also confirms the new token itself is valid - python-telegram-bot's `run_polling()` calls `getMe` during startup and would have raised before this line if the token were wrong.
 
 Full timeline of this incident, real evidence at every step: leak found reading a real CI log → root-caused to `httpx` INFO logging → fixed and mutation-tested → fix verified live on first deploy (no token line) → owner deleted the leaked bot and created a replacement → new token deployed and verified live, bot running.
+
+## fal.ai job timeout - real incident, root cause, and fix (2026-10-20)
+
+Real failure reported by the owner with evidence from three sources at once: two Telegram bot messages showing the exact same failure twice in a row -
+
+```
+تم توليد 0 مقطع لكن تعذّر دمجها. التكلفة الحقيقية حتى الآن: $0.000
+⚠️ فشلت 1 أسطر - يمكنك تعديلها وإعادة المحاولة:
+- سطر 1: fal.ai job did not complete within 600s (request_id=01a158d8-...)
+```
+
+- a fal.ai dashboard screenshot (`Credits: $2.78`, `Errors in the last 7 days: 0`, `Requests in the last 7 days: 15`) showing fal.ai's own side recorded **no error** for either attempt, and
+- a PayPal screenshot the owner read as "I paid and got nothing" - which on inspection is unrelated infrastructure billing (DigitalOcean droplet hosting, GitHub, Shopify), not fal.ai at all; the real fal.ai accounting for this specific incident is the bot's own `$0.000` line above (`DialoguePipeline` only prefixes a failed line with a "real money was spent" note when the `generate_speech_to_video` call itself succeeded - see "Clips discarded on partial pipeline failure" above - and it did not here).
+
+**Root cause, not guessed - read from the client code and fal.ai's own docs:**
+1. `RealFalVideoClient.generate_speech_to_video()` gave up polling at a flat 600s. The closest real timing figure found (a different host's own deployment of the same underlying Wan 2.2 speech-to-video model, since fal.ai publishes no published median for its own endpoint) reports a **median** successful run of ~412s - meaning 600s sat barely above the midpoint of the real distribution, so a routine (not rare) slower-than-median run would hit the cap and fail outright even with fal.ai working completely normally - consistent with fal.ai's own dashboard showing 0 errors on their side for both failures.
+2. **Separately, a real risk found while fixing this**: giving up at the deadline only stopped *this client* polling - fal's own queue docs state a queue-based job keeps running after the connection drops, and "only an explicit cancel API call can stop the request." The client captured a real `cancel_url` at submit time and never used it, so an abandoned job could keep running on fal's side and be billed with no video ever collected here - the worst version of exactly what the owner feared ("ادفع بدون نتيجة").
+
+**Fixed, both together:**
+- `POLL_TIMEOUT_S` raised from 600 to 1200 (real margin above the real ~412s median figure, not an arbitrary round number).
+- On timeout, `PUT <cancel_url>` is now sent (real HTTP method confirmed from fal's own queue docs: `PUT https://queue.fal.run/.../requests/{id}/cancel`) before raising - this removes a still-queued job outright (fal's docs: 200, never runs) and best-effort signals an in-progress one to stop, wrapped so a failure to cancel never hides the real timeout error.
+
+Covered by `tests/test_fal_video_client.py::test_generate_speech_to_video_cancels_the_real_job_on_a_real_timeout`, which fakes `time.monotonic()` to reach the deadline after exactly one poll (no real 1200s wait in the test) and asserts the real `cancel_url` was PUT. Mutation-tested: reverted the fix, confirmed the test fails with the old `600s` message, restored, confirmed the full 124-test suite green.
+
+**What this does NOT fix**: if fal.ai's own queue is genuinely overloaded well past 1200s, a job can still time out - this raises the margin to match real-world timing, it does not guarantee completion. The owner should retry the specific failed line with `/edit` rather than re-running the whole screenplay, which is exactly what the per-line `failed_lines` reporting (see above) exists for.

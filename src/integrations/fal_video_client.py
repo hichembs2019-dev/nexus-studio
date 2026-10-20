@@ -34,6 +34,18 @@ from abc import ABC, abstractmethod
 ENDPOINT_ID = "fal-ai/wan/v2.2-14b/speech-to-video"
 QUEUE_BASE_URL = "https://queue.fal.run"
 
+# Real incident, 2026-10-20: two separate real jobs against this exact
+# endpoint both timed out at the previous 600s cap ("fal.ai job did not
+# complete within 600s"), back to back. No third-party source gives fal's
+# own typical time for this model, but the closest real figure found (a
+# different host's own Wan 2.2 speech-to-video deployment, see
+# docs/SOURCES.md "fal.ai job timeout - real incident") reports a MEDIAN
+# of ~412s for a successful run - meaning the old 600s cap sat barely
+# above the midpoint of the real distribution, so a routine (not rare)
+# slower-than-median run would fail outright. Raised to a real margin
+# above that median rather than guessed.
+POLL_TIMEOUT_S = 1200
+
 PRICE_PER_SECOND_USD = {
     "480p": 0.10,
     "580p": 0.15,
@@ -76,8 +88,9 @@ class RealFalVideoClient(FalVideoClient):
         payload = submit.json()
         status_url = payload["status_url"]
         response_url = payload["response_url"]
+        cancel_url = payload.get("cancel_url")
 
-        deadline = time.monotonic() + 600
+        deadline = time.monotonic() + POLL_TIMEOUT_S
         while time.monotonic() < deadline:
             status_resp = httpx.get(status_url, headers=headers, timeout=30)
             if status_resp.status_code >= 400:
@@ -97,7 +110,25 @@ class RealFalVideoClient(FalVideoClient):
                 raise FalVideoError(f"fal.ai job failed: {status_resp.text[:500]}")
             time.sleep(3)
         else:
-            raise FalVideoError(f"fal.ai job did not complete within 600s (request_id={payload.get('request_id')})")
+            # Real risk found while fixing the 2026-10-20 double timeout:
+            # giving up here used to just stop polling. fal.ai's own docs
+            # (docs/SOURCES.md "fal.ai cancel API") say a queue-based
+            # job keeps running on their side after the connection drops -
+            # "only an explicit cancel API call can stop the request" -
+            # so an abandoned job could still finish and be billed with
+            # nothing here left to collect the video it paid for. PUT to
+            # the real cancel_url fal.ai gave at submit time at least
+            # removes a still-queued job outright (200, never runs) and
+            # best-effort signals an in-progress one to stop; its own
+            # outcome is never allowed to hide the real timeout below.
+            if cancel_url:
+                try:
+                    httpx.put(cancel_url, headers=headers, timeout=30)
+                except Exception:
+                    pass
+            raise FalVideoError(
+                f"fal.ai job did not complete within {POLL_TIMEOUT_S}s (request_id={payload.get('request_id')})"
+            )
 
         result_resp = httpx.get(response_url, headers=headers, timeout=30)
         if result_resp.status_code >= 400:

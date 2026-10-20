@@ -198,6 +198,55 @@ def test_generate_speech_to_video_raises_with_the_real_body_on_a_failed_result_f
         client.generate_speech_to_video(prompt="p", image_data_uri="i", audio_data_uri="a")
 
 
+def test_generate_speech_to_video_cancels_the_real_job_on_a_real_timeout(monkeypatch):
+    # Real incident, 2026-10-20: two real jobs against this endpoint both
+    # ran past the old 600s cap. fal.ai's own docs say a queue-based job
+    # keeps running after the client stops polling - only an explicit PUT
+    # to the real cancel_url stops it - so giving up here must call it,
+    # or an abandoned job can still finish and be billed with no video
+    # ever collected. A test that only checks FalVideoError is raised
+    # (not that cancel_url was actually PUT) would still pass if that
+    # call were deleted - this project's own mutation-testing rule.
+    cancel_calls = []
+
+    def fake_post(url, *, headers, json, timeout):
+        return _FakeResponse(
+            status_code=200,
+            json_data={
+                "request_id": "req-timeout",
+                "status_url": "https://queue.fal.run/x/requests/req-timeout/status",
+                "response_url": "https://queue.fal.run/x/requests/req-timeout",
+                "cancel_url": "https://queue.fal.run/x/requests/req-timeout/cancel",
+            },
+        )
+
+    def fake_get(url, *, headers=None, timeout=30):
+        return _FakeResponse(status_code=200, json_data={"status": "IN_PROGRESS"})
+
+    def fake_put(url, *, headers=None, timeout=30):
+        cancel_calls.append(url)
+        return _FakeResponse(status_code=202, json_data={"status": "CANCELLATION_REQUESTED"})
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setattr(httpx, "put", fake_put)
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    # First call computes the deadline, second lets exactly one poll
+    # happen, third jumps far past the deadline so the loop's own `else`
+    # (real timeout) fires without needing to wait for real wall-clock time.
+    monotonic_values = iter([0, 0, 10_000])
+    monkeypatch.setattr("time.monotonic", lambda: next(monotonic_values))
+
+    client = RealFalVideoClient("key")
+    with pytest.raises(FalVideoError, match="did not complete within 1200s"):
+        client.generate_speech_to_video(prompt="p", image_data_uri="i", audio_data_uri="a")
+
+    assert cancel_calls == ["https://queue.fal.run/x/requests/req-timeout/cancel"]
+
+
 def test_mock_fal_video_client_records_calls_and_returns_scripted_bytes():
     mock = MockFalVideoClient(scripted_bytes=b"scripted-clip")
 
