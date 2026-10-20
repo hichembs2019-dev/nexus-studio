@@ -146,22 +146,50 @@ class BotConversation:
         return BotReply(text=self._format_screenplay(screenplay), buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
 
     def handle_edit(self, chat_id: str, args_text: str) -> BotReply:
+        # Owner's instruction, 2026-10-20 ("لماذا كتبت يعدل مشهد واحد؟ بل
+        # يعدل كل المشاهد فالحرية لي" - why did you write it edits one
+        # scene? it should edit ALL scenes, the freedom is mine): /edit
+        # used to accept exactly one "<number> <text>" pair per command.
+        # It now accepts several, one per real line of the message (runner.py
+        # passes the raw, newline-preserving message text here instead of
+        # context.args, which collapses newlines into spaces and would
+        # make several edits unparseable) - every edit in the message is
+        # applied in one pass, and the owner gets the updated screenplay
+        # back once, not once per line.
         state = self._states.get(chat_id)
         if state is None or state.screenplay is None:
             return BotReply(text="لا توجد مسودة سيناريو بعد - ابدأ بـ /new.")
 
-        parts = args_text.strip().split(maxsplit=1)
-        if len(parts) != 2 or not parts[0].isdigit():
-            return BotReply(text="الاستخدام: /edit <رقم السطر> <الحوار الجديد>")
+        edits: list[tuple[int, str]] = []
+        for raw_line in args_text.strip().split("\n"):
+            raw_line = raw_line.strip()
+            if not raw_line:
+                continue
+            parts = raw_line.split(maxsplit=1)
+            if len(parts) == 2 and parts[0].isdigit():
+                edits.append((int(parts[0]), parts[1]))
 
-        line_number = int(parts[0])
-        new_text = parts[1]
-        matching = [l for l in state.screenplay.lines if l.index == line_number - 1]
-        if not matching:
-            return BotReply(text=f"لا يوجد سطر رقم {line_number} في المسودة الحالية (تحتوي على {len(state.screenplay.lines)} سطراً).")
+        if not edits:
+            return BotReply(
+                text=(
+                    "الاستخدام: /edit <رقم السطر> <الحوار الجديد>\n"
+                    "يمكنك تعديل عدة أسطر دفعة واحدة - كل تعديل في سطر منفصل من نفس الرسالة، مثلًا:\n"
+                    "/edit\n1 حوار جديد للسطر الأول\n3 حوار جديد للسطر الثالث"
+                )
+            )
 
-        matching[0].line = new_text
-        return BotReply(text=self._format_screenplay(state.screenplay), buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
+        not_found: list[int] = []
+        for line_number, new_text in edits:
+            matching = [l for l in state.screenplay.lines if l.index == line_number - 1]
+            if not matching:
+                not_found.append(line_number)
+                continue
+            matching[0].line = new_text
+
+        reply_text = self._format_screenplay(state.screenplay)
+        if not_found:
+            reply_text += f"\n\n⚠️ لم توجد هذه الأرقام في المسودة الحالية (تحتوي على {len(state.screenplay.lines)} سطراً): {', '.join(str(n) for n in not_found)}"
+        return BotReply(text=reply_text, buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
 
     def handle_cancel(self, chat_id: str) -> BotReply:
         self._states[chat_id] = _ChatState()
@@ -237,5 +265,5 @@ class BotConversation:
         lines.append("")
         est_cost = len(screenplay.lines) * ESTIMATED_SECONDS_PER_LINE * PRICE_PER_SECOND_USD["480p"]
         lines.append(f"(تكلفة تقديرية تقريبية: ${est_cost:.2f} - التكلفة الحقيقية تُحسب بعد التوليد الفعلي)")
-        lines.append("لتعديل سطر: /edit <الرقم> <الحوار الجديد>")
+        lines.append("لتعديل سطر أو عدة أسطر دفعة واحدة، كل تعديل في سطر منفصل:\n/edit\n<الرقم> <الحوار الجديد>\n<رقم آخر> <حوار آخر>")
         return "\n".join(lines)

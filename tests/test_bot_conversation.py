@@ -161,7 +161,8 @@ def test_edit_on_an_out_of_range_line_reports_it_clearly():
 
     reply = conversation.handle_edit("chat1", "5 something")
 
-    assert "سطر رقم 5" in reply.text
+    assert "لم توجد هذه الأرقام" in reply.text
+    assert "5" in reply.text
 
 
 def test_edit_without_a_draft_tells_the_user_to_start_with_new():
@@ -170,6 +171,51 @@ def test_edit_without_a_draft_tells_the_user_to_start_with_new():
     reply = conversation.handle_edit("chat1", "1 x")
 
     assert "/new" in reply.text
+
+
+def test_edit_updates_several_lines_from_one_multiline_message():
+    # Owner's instruction, 2026-10-20 ("لماذا كتبت يعدل مشهد واحد؟ بل
+    # يعدل كل المشاهد فالحرية لي" - why did you write it edits one
+    # scene? it should edit ALL scenes, the freedom is mine): one /edit
+    # message, several "<number> <text>" edits, one per real line,
+    # applied together in a single pass.
+    cast = _cast_reply(("فوزية", "female", "middle"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""), ("فوزية", "beat three", ""))
+    conversation, _ = _conversation([cast, lines])
+    conversation.handle_new("chat1", f"{int(3 * ESTIMATED_SECONDS_PER_LINE)} idea")
+
+    reply = conversation.handle_edit("chat1", "1 new first line\n3 new third line")
+
+    assert "new first line" in reply.text
+    assert "beat one" not in reply.text
+    assert "beat two" in reply.text  # untouched line 2 survives
+    assert "new third line" in reply.text
+    assert "beat three" not in reply.text
+
+
+def test_edit_reports_not_found_lines_but_still_applies_the_valid_ones():
+    cast = _cast_reply(("فوزية", "female", "middle"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
+    conversation, _ = _conversation([cast, lines])
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
+
+    reply = conversation.handle_edit("chat1", "1 fixed line\n9 does not exist")
+
+    assert "fixed line" in reply.text
+    assert "لم توجد هذه الأرقام" in reply.text
+    assert "9" in reply.text
+
+
+def test_edit_with_blank_lines_in_the_message_ignores_them():
+    cast = _cast_reply(("فوزية", "female", "middle"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
+    conversation, _ = _conversation([cast, lines])
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
+
+    reply = conversation.handle_edit("chat1", "1 fixed\n\n   \n")
+
+    assert "fixed" in reply.text
+    assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
 
 
 def test_approve_returns_the_exact_draft_screenplay_for_real_production():

@@ -133,8 +133,18 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         conversation.handle_plain_text(chat_id, update.message.text or "")
 
     async def _edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        # Owner's instruction, 2026-10-20: /edit now accepts several
+        # "<number> <text>" edits at once, one per real newline - but
+        # context.args splits the message on ANY whitespace, including
+        # newlines, collapsing multiple edits into one unparseable blob.
+        # str.split(None, 1) splits on only the FIRST whitespace run (the
+        # one right after "/edit"), so everything after it - including
+        # every real newline the owner typed - reaches handle_edit intact.
         chat_id = str(update.effective_chat.id)
-        reply = conversation.handle_edit(chat_id, " ".join(context.args))
+        raw_text = update.message.text or ""
+        parts = raw_text.split(None, 1)
+        args_text = parts[1] if len(parts) == 2 else ""
+        reply = conversation.handle_edit(chat_id, args_text)
         await _send_reply(chat_id, context, reply)
 
     async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
