@@ -784,3 +784,20 @@ Covered by `tests/test_bot_conversation.py::test_edit_updates_several_lines_from
   already shown to them beforehand (`_format_screenplay`'s estimate
   line) - this is a real-money action gated by human approval by design,
   not yet exercised live.
+
+## Automatic deploy (CI/CD) - first real success, and a real secret leak found in its own log (2026-10-20)
+
+**Resolution of the "tested live, three times, still failing" entry above.** After the owner re-entered all three secrets (`DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`) via the pencil/edit icon on the existing entries - the earlier failures were a genuinely empty/malformed secret value each time, confirmed from the real job logs each time, never guessed - a `workflow_dispatch` run (`run_number: 7`, `id: 39400343284`) finished with `conclusion: "success"`. Read directly from the run's own job log (`get_job_logs`), not inferred from the green checkmark alone:
+
+- SSH connected (`appleboy/ssh-action@v1.2.4`, step duration 16.7s - the first run that took longer than a few seconds, because it was the first one that got past authentication).
+- `git pull origin main` fast-forwarded `2980282..27b37c3`, the real latest commit (multi-line `/edit`), 9 files changed - printed in the log, not assumed.
+- `docker compose up -d --build nexus-studio` rebuilt the image, including `COPY assets ./assets` (step 7/7, the exact step whose absence caused the very first real Approve failure - see "Real deployment, 2026-10-19" above) - `Container nexus-studio-nexus-studio-1 Recreated` → `Started`.
+- The bot's own post-deploy log, captured by the workflow's own `docker compose logs --tail=30`, shows a real successful boot: `nexus-studio bot starting (long-polling)`, `POST .../getMe "200 OK"`, `POST .../deleteWebhook "200 OK"`, `Application started`.
+
+This is the first push-to-deploy cycle that needed zero manual console steps end to end.
+
+**Real secret leak found in reading that same log.** The `getMe`/`deleteWebhook` log lines above printed the full Telegram API URL - `https://api.telegram.org/bot<TOKEN>/getMe` - with the live bot token in plain text, inside a GitHub Actions run log. Root cause: `src/main.py`'s `logging.basicConfig(level=logging.INFO)` left `httpx`'s own logger at INFO, and httpx logs the complete request URL at that level; the container prints that to stdout, and the workflow's own `docker compose logs` step (added so a deploy failure is visible without SSHing in by hand) relays stdout straight into the run log. GitHub only masks values it knows are `secrets.*` in the *workflow's own* `with:`/`env:` block (`DEPLOY_HOST`/`DEPLOY_USER`/`DEPLOY_SSH_KEY` show as `***` in the same log) - it has no way to know a string appearing inside a shell command's own output is a secret too.
+
+Fixed at the root, not by hiding the symptom: `logging.getLogger("httpx").setLevel(logging.WARNING)` added right after `basicConfig` in `src/main.py`, so httpx never logs the token-bearing URL at any level anywhere again - in this log, a future one, or a local run. Covered by `tests/test_main_logging.py::test_httpx_logger_is_not_info_level`, which imports `src.main` and asserts the `httpx` logger's own `.level` is at or above `WARNING`; mutation-tested (reverted `src/main.py`, confirmed the test fails with `httpx logger is at NOTSET`, restored, confirmed the full 123-test suite green).
+
+**The already-leaked token itself is not fixed by this change** - the fix stops the next leak, not the one that already happened. The owner needs to rotate the real bot token via @BotFather (`/revoke` or `/token` on the existing bot) and update `TELEGRAM_BOT_TOKEN` on the real droplet - this requires the owner's own Telegram account and cannot be done from here.
