@@ -15,6 +15,21 @@ on:
     branches: [main]
   workflow_dispatch: {}
 
+# Real collision found live, 2026-10-20: a push-triggered run and a manual
+# workflow_dispatch run against the same commit landed on the droplet at
+# the same moment. Both ran `docker compose up -d --build` concurrently;
+# the second one's `docker rename` step hit the first one's container
+# still mid-recreate - "Conflict. The container name
+# ...nexus-studio-nexus-studio-1 is already in use" - and failed outright,
+# visible as a real red run with no code at fault. `cancel-in-progress:
+# false` queues a second run instead of cancelling (a cancelled run could
+# land between `docker compose up -d --build` starting the new container
+# and `docker compose logs` reading it, silently losing the log evidence
+# this workflow exists to produce) or racing it (this incident).
+concurrency:
+  group: deploy-droplet
+  cancel-in-progress: false
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

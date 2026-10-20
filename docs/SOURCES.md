@@ -801,3 +801,18 @@ This is the first push-to-deploy cycle that needed zero manual console steps end
 Fixed at the root, not by hiding the symptom: `logging.getLogger("httpx").setLevel(logging.WARNING)` added right after `basicConfig` in `src/main.py`, so httpx never logs the token-bearing URL at any level anywhere again - in this log, a future one, or a local run. Covered by `tests/test_main_logging.py::test_httpx_logger_is_not_info_level`, which imports `src.main` and asserts the `httpx` logger's own `.level` is at or above `WARNING`; mutation-tested (reverted `src/main.py`, confirmed the test fails with `httpx logger is at NOTSET`, restored, confirmed the full 123-test suite green).
 
 **The already-leaked token itself is not fixed by this change** - the fix stops the next leak, not the one that already happened. The owner needs to rotate the real bot token via @BotFather (`/revoke` or `/token` on the existing bot) and update `TELEGRAM_BOT_TOKEN` on the real droplet - this requires the owner's own Telegram account and cannot be done from here.
+
+## Real concurrent-deploy collision, found immediately after the first real CI/CD success (2026-10-20)
+
+Minutes after the first real push-triggered deploy succeeded (run #8, `conclusion: success` - the httpx-logging fix above, confirmed live via its own job log: `git pull` fast-forwarded, image rebuilt, container recreated and started), a second run (#9, a manual `workflow_dispatch` fired to double-check the result) landed on the same droplet while #8 was still mid-`docker compose up -d --build`. Read from #9's own real job log, not guessed:
+
+```
+Container nexus-studio-nexus-studio-1  Recreate
+Error response from daemon: Conflict. The container name
+"/b35aba93a2c4_nexus-studio-nexus-studio-1" is already in use by
+container "0873e46dec97...". You have to remove (or rename) that
+container to be able to reuse that name.
+Process exited with status 1
+```
+
+Not a code defect - a real gap in `deploy.yml` itself: nothing stopped two deploys from running at once, and Docker's own rename-during-recreate step collided when they did. Fixed with a `concurrency: {group: deploy-droplet, cancel-in-progress: false}` block - a second run now queues behind the first instead of racing it (queuing rather than cancelling, specifically, because a cancelled mid-deploy run could land between `docker compose up -d --build` and the `docker compose logs` read that is this workflow's whole reason for existing, silently losing the evidence a real failure needs).
