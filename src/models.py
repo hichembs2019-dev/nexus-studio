@@ -92,6 +92,16 @@ class Character:
     name: str
     reference_image_path: str
     voice: str = "ar-SY-LaithNeural"
+    # Owner's instruction, 2026-10-20, rejecting a fixed panel of six
+    # generic photos reused across every story forever ("لا تكون صور
+    # ثابتة الى الابد ... بل حسب القصة و السيناريو" - not fixed forever,
+    # but according to the story and screenplay): a short visual
+    # description (hair, build, distinguishing features) inferred from
+    # THIS premise by the same cast-writing LLM call that already infers
+    # gender/age_group - DialoguePipeline uses it to generate a real,
+    # story-specific reference photo per character instead of reusing one
+    # of a handful of generic ones across unrelated stories.
+    appearance: str = ""
 
 
 @dataclass
@@ -164,10 +174,19 @@ class ProducedDialogueEpisode:
     # can see exactly which lines were skipped and why, with zero real
     # fal.ai spend against any of them.
     skipped_lines: list[DialogueLine] = field(default_factory=list)
+    # Owner's instruction, 2026-10-20: a real reference photo generated
+    # per character per screenplay (not a fixed panel reused forever -
+    # see Character.appearance) - its real cost must be visible in the
+    # same total the owner already checks, and a failure to generate one
+    # must fall back to the cheap generic placeholder for that character
+    # rather than aborting the whole episode, with the real reason kept
+    # here instead of silently swallowed.
+    portrait_cost_usd: float = 0.0
+    portrait_failures: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def total_cost_usd(self) -> float:
-        return sum(c.cost_usd for c in self.clips)
+        return sum(c.cost_usd for c in self.clips) + self.portrait_cost_usd
 
 
 @dataclass

@@ -230,6 +230,18 @@ class BotConversation:
             if produced.skipped_lines
             else ""
         )
+        # Owner's instruction, 2026-10-20: a real photo is now generated
+        # per character per story - if that real generation fails for a
+        # character, production still continues with their cheap generic
+        # placeholder (DialoguePipeline's own fallback) rather than
+        # aborting, but the owner must be told by name which character
+        # that happened to, not left to notice a face doesn't match.
+        portrait_note = (
+            "\n\n🖼️ تعذّر توليد صورة واقعية لهذه الشخصيات (استُخدمت صورة افتراضية بدلاً منها):\n"
+            + "\n".join(f"- {name}: {error}" for name, error in produced.portrait_failures)
+            if produced.portrait_failures
+            else ""
+        )
         if produced.stitched_path is None:
             # Real incident, 2026-10-20: a real $8.18 run's clips were all
             # genuinely finished, but the merge step failed and the owner
@@ -246,20 +258,20 @@ class BotConversation:
                     text=(
                         f"⚠️ تم توليد {len(produced.clips)} مقطع حقيقي بنجاح (التكلفة الحقيقية "
                         f"${produced.total_cost_usd:.3f}) لكن تعذّر دمجها في فيديو واحد - "
-                        f"كل مقطع مُرسل أدناه منفصلًا.{stitch_note}{failed_note}{skipped_note}"
+                        f"كل مقطع مُرسل أدناه منفصلًا.{stitch_note}{failed_note}{skipped_note}{portrait_note}"
                     ),
                     video_paths=[c.local_path for c in produced.clips],
                 )
             return BotReply(
                 text=(
                     f"تم توليد 0 مقطع. التكلفة الحقيقية حتى الآن: ${produced.total_cost_usd:.3f}"
-                    f"{stitch_note}{failed_note}{skipped_note}"
+                    f"{stitch_note}{failed_note}{skipped_note}{portrait_note}"
                 )
             )
         return BotReply(
             text=(
                 f"✅ تم. {len(produced.clips)} مقطع حوار، التكلفة الحقيقية "
-                f"${produced.total_cost_usd:.3f}.{failed_note}{skipped_note}"
+                f"${produced.total_cost_usd:.3f}.{failed_note}{skipped_note}{portrait_note}"
             ),
             video_path=produced.stitched_path,
             buttons=[("📤 نشر على YouTube", "publish:youtube"), ("🗑️ تجاهل", "discard")],

@@ -9,7 +9,9 @@ from src.integrations.reasoning_client import MockAgentReasoningClient
 
 
 def _cast_reply(*people):
-    return json.dumps([{"name": n, "gender": g, "age_group": a} for n, g, a in people])
+    return json.dumps(
+        [{"name": n, "gender": g, "age_group": a, "appearance": f"{g}, {a}, ordinary appearance"} for n, g, a in people]
+    )
 
 
 def test_write_dialogue_screenplay_builds_cast_then_lines():
@@ -158,6 +160,33 @@ def test_write_dialogue_screenplay_raises_if_cast_item_is_missing_a_required_fie
 
     with pytest.raises(DialogueWriterError, match="age_group"):
         writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+
+def test_write_dialogue_screenplay_raises_if_cast_item_is_missing_appearance():
+    # Owner's instruction, 2026-10-20, rejecting a fixed panel of six
+    # generic photos reused forever ("لا تكون صور ثابتة الى الابد ...
+    # بل حسب القصة و السيناريو"): every cast member needs a real,
+    # story-specific appearance description, validated the same way
+    # name/gender/age_group already are.
+    cast_reply = json.dumps([{"name": "فوزية", "gender": "female", "age_group": "middle"}])  # missing appearance
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="appearance"):
+        writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+
+def test_write_dialogue_screenplay_carries_the_real_appearance_onto_the_character():
+    cast_reply = json.dumps(
+        [{"name": "فوزية", "gender": "female", "age_group": "middle", "appearance": "curly dark hair, slender build"}]
+    )
+    lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    screenplay = writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+    assert screenplay.characters[0].appearance == "curly dark hair, slender build"
 
 
 def test_write_dialogue_screenplay_strips_markdown_fences_on_both_calls():

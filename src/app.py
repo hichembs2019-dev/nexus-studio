@@ -14,6 +14,7 @@ from .bot.conversation import BotConversation
 from .config import Settings
 from .integrations.comfyui_client import ComfyUIClient, MockComfyUIClient, RealComfyUIClient
 from .integrations.fal_video_client import FalVideoClient, MockFalVideoClient, RealFalVideoClient
+from .integrations.image_client import MockImageClient, RealFalImageClient
 from .integrations.publishing_client import MockPublishingClient, PublishingClient, RealYouTubeClient
 from .integrations.reasoning_client import (
     AgentReasoningClient,
@@ -121,11 +122,20 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
             fal_video, tts, settings.output_dir,
             tts_lang=settings.azure_tts_lang,
             max_cost_usd=settings.max_episode_cost_usd,
+            # Owner's instruction, 2026-10-20: a real, story-specific
+            # photo per character (not a fixed panel of six reused
+            # forever) - same FAL_KEY, a second real endpoint
+            # (fal-ai/flux/dev, see image_client.py).
+            image_client=RealFalImageClient(settings.fal_key),
         )
     elif force_mocks:
         fal_video = MockFalVideoClient()
         dialogue_writer = DialogueWriterAgent(reasoning)
-        dialogue_pipeline = DialoguePipeline(fal_video, tts or MockTTSClient(), settings.output_dir, tts_lang=settings.azure_tts_lang)
+        dialogue_pipeline = DialoguePipeline(
+            fal_video, tts or MockTTSClient(), settings.output_dir,
+            tts_lang=settings.azure_tts_lang,
+            image_client=MockImageClient(),
+        )
     else:
         logger.warning("FAL_KEY and/or AZURE_SPEECH_KEY not set - real dialogue/lip-sync pipeline unavailable")
         fal_video = None

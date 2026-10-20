@@ -5,10 +5,13 @@ import subprocess
 
 import pytest
 
+import base64
+
 from src.integrations.fal_video_client import MockFalVideoClient
+from src.integrations.image_client import ImageGenerationError, MockImageClient, PRICE_PER_MEGAPIXEL_USD
 from src.integrations.tts_client import MockTTSClient
 from src.models import Character, DialogueLine, DialogueScreenplay
-from src.workflows.dialogue_pipeline import CINEMATIC_STYLE_SUFFIX, DialoguePipeline, DialoguePipelineError
+from src.workflows.dialogue_pipeline import CINEMATIC_STYLE_SUFFIX, PORTRAIT_STYLE_SUFFIX, DialoguePipeline, DialoguePipelineError
 
 
 def _ref_image(path: str) -> None:
@@ -207,6 +210,139 @@ def test_produce_stops_spending_once_the_hard_cost_ceiling_is_reached(tmp_path):
     assert len(produced.clips) == 1
     assert [l.index for l in produced.skipped_lines] == [1, 2]
     assert produced.total_cost_usd == pytest.approx(0.10)
+
+
+def test_produce_generates_and_uses_a_real_portrait_for_a_character_with_appearance(tmp_path):
+    # Owner's instruction, 2026-10-20, rejecting a fixed panel of six
+    # generic photos reused across every story forever ("لا تكون صور
+    # ثابتة الى الابد ... بل حسب القصة و السيناريو"): a character with a
+    # real appearance description must get a real, generated photo used
+    # in the actual fal.ai video call - not the cheap generic placeholder
+    # resolve_placeholder_photo assigned at screenplay-writing time. A
+    # test that only checks produce() succeeds would still pass with the
+    # cartoon placeholder silently still being used.
+    ref_path = str(tmp_path / "ref.jpg")
+    _ref_image(ref_path)
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    tts = MockTTSClient()
+    image_client = MockImageClient(scripted_bytes=b"real-generated-portrait-bytes")
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=image_client)
+    screenplay = DialogueScreenplay(
+        title="Dinner",
+        premise="p",
+        characters=[Character(name="A", reference_image_path=ref_path, appearance="curly dark hair, slender build")],
+        lines=[DialogueLine(index=0, character="A", line="one", action="a1")],
+    )
+
+    produced = pipeline.produce(screenplay)
+
+    assert image_client.calls == ["photorealistic portrait photo of curly dark hair, slender build" + PORTRAIT_STYLE_SUFFIX]
+    sent_image_b64 = fal_video.calls[0]["image_data_uri"].split(",", 1)[1]
+    assert base64.b64decode(sent_image_b64) == b"real-generated-portrait-bytes"
+    assert produced.portrait_cost_usd == pytest.approx(PRICE_PER_MEGAPIXEL_USD)
+    assert produced.total_cost_usd == pytest.approx(0.10 + PRICE_PER_MEGAPIXEL_USD)
+
+
+def test_produce_reuses_the_cached_portrait_without_regenerating_on_a_second_call(tmp_path):
+    ref_path = str(tmp_path / "ref.jpg")
+    _ref_image(ref_path)
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    tts = MockTTSClient()
+    image_client = MockImageClient()
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=image_client)
+    screenplay = DialogueScreenplay(
+        title="Dinner", premise="p",
+        characters=[Character(name="A", reference_image_path=ref_path, appearance="curly dark hair")],
+        lines=[DialogueLine(index=0, character="A", line="one", action="a1")],
+    )
+
+    pipeline.produce(screenplay)
+    second = pipeline.produce(screenplay)
+
+    assert len(image_client.calls) == 1  # not regenerated - cached on disk from the first call
+    assert second.portrait_cost_usd == 0.0
+
+
+def test_produce_falls_back_to_the_placeholder_when_portrait_generation_fails(tmp_path):
+    ref_path = str(tmp_path / "ref.jpg")
+    _ref_image(ref_path)
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+
+    class _FailingImageClient:
+        def generate_image(self, prompt):
+            raise ImageGenerationError("fal.ai image job failed: simulated real failure")
+
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    tts = MockTTSClient()
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=_FailingImageClient())
+    screenplay = DialogueScreenplay(
+        title="Dinner", premise="p",
+        characters=[Character(name="A", reference_image_path=ref_path, appearance="curly dark hair")],
+        lines=[DialogueLine(index=0, character="A", line="one", action="a1")],
+    )
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(produced.clips) == 1  # production still continues
+    sent_image_b64 = fal_video.calls[0]["image_data_uri"].split(",", 1)[1]
+    with open(ref_path, "rb") as f:
+        assert base64.b64decode(sent_image_b64) == f.read()  # fell back to the real placeholder file
+    assert produced.portrait_failures == [("A", "fal.ai image job failed: simulated real failure")]
+    assert produced.portrait_cost_usd == 0.0
+
+
+def test_produce_without_an_image_client_uses_the_placeholder_for_free(tmp_path):
+    ref_path = str(tmp_path / "ref.jpg")
+    _ref_image(ref_path)
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    pipeline = DialoguePipeline(fal_video, MockTTSClient(), str(tmp_path))  # no image_client
+    screenplay = DialogueScreenplay(
+        title="Dinner", premise="p",
+        characters=[Character(name="A", reference_image_path=ref_path, appearance="curly dark hair")],
+        lines=[DialogueLine(index=0, character="A", line="one", action="a1")],
+    )
+
+    produced = pipeline.produce(screenplay)
+
+    assert produced.portrait_cost_usd == 0.0
+    assert produced.portrait_failures == []
+
+
+def test_produce_portrait_generation_respects_the_hard_cost_ceiling(tmp_path):
+    ref_path = str(tmp_path / "ref.jpg")
+    _ref_image(ref_path)
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    image_client = MockImageClient()
+    # The ceiling allows the FIRST portrait through (nothing spent yet to
+    # compare against) but must block the second real portrait call -
+    # same "checked before, not after" principle as the per-line ceiling.
+    pipeline = DialoguePipeline(
+        fal_video, MockTTSClient(), str(tmp_path),
+        image_client=image_client, max_cost_usd=PRICE_PER_MEGAPIXEL_USD / 2,
+    )
+    screenplay = DialogueScreenplay(
+        title="Dinner", premise="p",
+        characters=[
+            Character(name="A", reference_image_path=ref_path, appearance="curly dark hair"),
+            Character(name="B", reference_image_path=ref_path, appearance="short grey hair"),
+        ],
+        lines=[
+            DialogueLine(index=0, character="A", line="one", action="a1"),
+            DialogueLine(index=1, character="B", line="two", action="b1"),
+        ],
+    )
+
+    pipeline.produce(screenplay)
+
+    assert len(image_client.calls) == 1  # the second character's portrait was never attempted
 
 
 def test_produce_rejects_a_line_whose_speaker_is_not_in_the_cast(tmp_path):

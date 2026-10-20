@@ -25,10 +25,19 @@ import re
 import subprocess
 
 from src.integrations.fal_video_client import PRICE_PER_SECOND_USD, FalVideoClient
+from src.integrations.image_client import PRICE_PER_MEGAPIXEL_USD, ImageClient
 from src.integrations.tts_client import TTSClient
-from src.models import DialogueScreenplay, ProducedDialogueClip, ProducedDialogueEpisode
+from src.models import Character, DialogueScreenplay, ProducedDialogueClip, ProducedDialogueEpisode
 
 CINEMATIC_STYLE_SUFFIX = ", cinematic lighting, warm color grading, emotional close-up shot, high production value television drama"
+
+# Owner's instruction, 2026-10-20, rejecting a fixed panel of six generic
+# photos reused across every story forever ("لا تكون صور ثابتة الى الابد
+# ... بل حسب القصة و السيناريو"): one real reference photo is generated
+# per character, from that character's own `appearance` (inferred by the
+# cast-writing LLM call from THIS premise, see dialogue_writer.py) -
+# never two different stories' characters sharing the same face.
+PORTRAIT_STYLE_SUFFIX = ", neutral friendly expression, looking directly at camera, soft studio lighting, plain neutral background, photorealistic, shot on a DSLR, sharp focus"
 
 
 class DialoguePipelineError(Exception):
@@ -71,12 +80,19 @@ class DialoguePipeline:
         tts_lang: str = "ar-SY",
         resolution: str = "480p",
         max_cost_usd: float | None = None,
+        image_client: ImageClient | None = None,
     ):
         self._fal_video = fal_video
         self._tts = tts
         self._output_dir = output_dir
         self._tts_lang = tts_lang
         self._resolution = resolution
+        # Owner's instruction, 2026-10-20: None here means "no real photo
+        # generation available" - every character keeps the cheap generic
+        # placeholder resolve_placeholder_photo already assigned (same
+        # fallback used when real generation fails for one character),
+        # never an invented or missing face.
+        self._image_client = image_client
         # Owner's instruction, 2026-10-20 ("قلت لك ضع له كود يشتغل و يسحب
         # المال الا عند صنع فيديو" - put code in that only draws money
         # when a video is actually made): a hard ceiling on total real
@@ -93,7 +109,30 @@ class DialoguePipeline:
         clips: list[ProducedDialogueClip] = []
         failed_lines: list[tuple] = []
         skipped_lines: list = []
+        portrait_failures: list[tuple[str, str]] = []
+        portrait_cost_usd = 0.0
         spent_so_far = 0.0
+
+        # Pre-pass: one real, story-specific reference photo per speaking
+        # character, generated once here and reused for every line that
+        # character has below - never per line, and never regenerated on
+        # a retry of this same screenplay (the cache path is keyed to
+        # this episode's own slug + character name).
+        speaking_names = {l.character for l in screenplay.lines}
+        resolved_photos: dict[str, str] = {}
+        for character in screenplay.characters:
+            if character.name not in speaking_names:
+                continue
+            if self._max_cost_usd is not None and spent_so_far >= self._max_cost_usd:
+                resolved_photos[character.name] = character.reference_image_path
+                continue
+            photo_path, cost, failure = self._resolve_character_photo(character, slug)
+            resolved_photos[character.name] = photo_path
+            spent_so_far += cost
+            portrait_cost_usd += cost
+            if failure:
+                portrait_failures.append((character.name, failure))
+
         for line in screenplay.lines:
             if self._max_cost_usd is not None and spent_so_far >= self._max_cost_usd:
                 # The ceiling was already reached by an earlier real,
@@ -117,6 +156,7 @@ class DialoguePipeline:
                     f"Character {character.name!r} reference_image_path "
                     f"{character.reference_image_path!r} does not exist on disk"
                 )
+            photo_path = resolved_photos.get(character.name, character.reference_image_path)
 
             # Real finding, 2026-10-19: a real 22-line run paid for and
             # successfully generated ~15 real clips (fal.ai's own
@@ -143,7 +183,7 @@ class DialoguePipeline:
                 with open(audio_path, "wb") as f:
                     f.write(audio_bytes)
 
-                image_data_uri = _data_uri(character.reference_image_path)
+                image_data_uri = _data_uri(photo_path)
                 audio_data_uri = _bytes_data_uri(audio_bytes, "audio/mpeg")
 
                 clip_bytes = self._fal_video.generate_speech_to_video(
@@ -194,7 +234,33 @@ class DialoguePipeline:
             failed_lines=failed_lines,
             stitch_error=stitch_error,
             skipped_lines=skipped_lines,
+            portrait_cost_usd=portrait_cost_usd,
+            portrait_failures=portrait_failures,
         )
+
+    def _resolve_character_photo(self, character: Character, slug: str) -> tuple[str, float, str | None]:
+        """Returns (path_to_use, real_cost_added_usd, failure_reason_or_None).
+        Generates at most once ever per (this screenplay, this character) -
+        a cached file on disk short-circuits every later call, including a
+        retry of this same screenplay after an /edit. Falls back to the
+        character's own cheap placeholder on any real failure or when no
+        image client is configured, rather than aborting production."""
+        char_slug = re.sub(r"[^a-z0-9]+", "_", character.name.lower()).strip("_") or "character"
+        cache_dir = os.path.join(self._output_dir, "characters")
+        cache_path = os.path.join(cache_dir, f"{slug}_{char_slug}.jpg")
+        if os.path.isfile(cache_path):
+            return cache_path, 0.0, None
+        if self._image_client is None or not character.appearance:
+            return character.reference_image_path, 0.0, None
+        try:
+            os.makedirs(cache_dir, exist_ok=True)
+            prompt = f"photorealistic portrait photo of {character.appearance}" + PORTRAIT_STYLE_SUFFIX
+            image_bytes = self._image_client.generate_image(prompt)
+            with open(cache_path, "wb") as f:
+                f.write(image_bytes)
+            return cache_path, PRICE_PER_MEGAPIXEL_USD, None
+        except Exception as exc:
+            return character.reference_image_path, 0.0, str(exc)
 
     def _stitch(self, clips: list[ProducedDialogueClip], slug: str) -> str:
         list_path = os.path.join(self._output_dir, f"{slug}_dialogue_concat_list.txt")

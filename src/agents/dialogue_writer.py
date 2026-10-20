@@ -105,10 +105,11 @@ _CAST_SYSTEM_PROMPT = """You are a casting director listing the speaking charact
 
 Rules:
 - Output ONLY a JSON array of objects, nothing else - no markdown fences, no commentary.
-- Each object has exactly three keys:
+- Each object has exactly four keys:
   - "name": the character's name, as it should appear consistently everywhere (same spelling every time).
   - "gender": "male" or "female" - your best real inference from how the premise describes or refers to them.
   - "age_group": "young" (child/teen/20s), "middle" (30s-50s), or "older" (60+) - your best real inference.
+  - "appearance": a short (one sentence, English) physical description for generating a reference photo of THIS character - hair color/style, build, any distinguishing feature the premise mentions. If the premise gives no physical detail, invent a plausible, ordinary one consistent with their gender/age/role - never leave this generic or reuse the exact same wording for two different characters in the same cast.
 - Only characters who actually SPEAK a line - no narrators, no silent background characters.
 - NEVER create a character named/role "narrator", "راوي", "الراوي" or similar. If the premise is written as first-person memoir/narrative prose (e.g. "كنت..."/"I was..."), the person telling it is a REAL character who appears in the scenes and speaks real dialogue - cast them by their actual name if the premise gives one, otherwise by their real role in the story (e.g. "الزوج"/"the husband", "الأب"/"the father") - never as "narrator".
 - 2 to 6 characters, names in the SAME language/script as the premise."""
@@ -198,8 +199,14 @@ class DialogueWriterAgent:
         characters = [
             Character(
                 name=c["name"],
+                # The cheap generic placeholder, used only as a free
+                # preview before Approve and as DialoguePipeline's fallback
+                # if real portrait generation fails - DialoguePipeline
+                # replaces this with a real, story-specific photo
+                # generated from `appearance` once production is approved.
                 reference_image_path=resolve_placeholder_photo(c["gender"], c["age_group"]),
                 voice=resolve_placeholder_voice(c["gender"]),
+                appearance=c["appearance"],
             )
             for c in cast
         ]
@@ -234,9 +241,11 @@ class DialogueWriterAgent:
             # handler (runner.py) now at least reports, but this is the
             # right place to catch it with a real, specific message.
             if not isinstance(item, dict) or not all(
-                isinstance(item.get(k), str) and item.get(k).strip() for k in ("name", "gender", "age_group")
+                isinstance(item.get(k), str) and item.get(k).strip()
+                for k in ("name", "gender", "age_group", "appearance")
             ):
                 raise DialogueWriterError(
-                    f"Cast reply item {item!r} is missing or has a non-string/empty 'name'/'gender'/'age_group': {raw_reply!r}"
+                    f"Cast reply item {item!r} is missing or has a non-string/empty "
+                    f"'name'/'gender'/'age_group'/'appearance': {raw_reply!r}"
                 )
         return parsed

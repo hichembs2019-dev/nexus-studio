@@ -11,7 +11,9 @@ from src.models import Character, DialogueLine, DialogueScreenplay, ProducedDial
 
 
 def _cast_reply(*people):
-    return json.dumps([{"name": n, "gender": g, "age_group": a} for n, g, a in people])
+    return json.dumps(
+        [{"name": n, "gender": g, "age_group": a, "appearance": f"{g}, {a}, ordinary appearance"} for n, g, a in people]
+    )
 
 
 def _lines_reply(*lines):
@@ -305,6 +307,26 @@ def test_format_produced_reports_lines_skipped_by_the_hard_cost_ceiling():
 
     assert "توقف التوليد عند الحد الأقصى" in reply.text
     assert "2" in reply.text  # 1-indexed line number, not the 0-indexed .index
+
+
+def test_format_produced_reports_portrait_generation_failures_by_character_name():
+    # Owner's instruction, 2026-10-20: a real, story-specific photo is
+    # generated per character - if that fails for one of them, production
+    # still continues with their cheap generic placeholder, but the owner
+    # must be told by name which character that happened to, not left to
+    # notice a mismatched face on their own.
+    conversation, _ = _conversation([])
+    screenplay = DialogueScreenplay(title="T", premise="p", characters=[], lines=[])
+    clip = ProducedDialogueClip(line=DialogueLine(index=0, character="X", line="hi"), local_path="/tmp/c0.mp4", cost_usd=0.4)
+    produced = ProducedDialogueEpisode(
+        screenplay=screenplay, clips=[clip], stitched_path="/tmp/out.mp4",
+        portrait_failures=[("فوزية", "fal.ai image job failed: real reason")],
+    )
+
+    reply = conversation.format_produced("chat1", produced)
+
+    assert "فوزية" in reply.text
+    assert "real reason" in reply.text
 
 
 def test_format_produced_reports_failed_lines_by_number():
