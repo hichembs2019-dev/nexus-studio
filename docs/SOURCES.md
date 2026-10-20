@@ -916,3 +916,23 @@ Owner's question after reviewing a real long screenplay (8 scenes, originally 26
 **Also found while fixing this**: the earlier cast cap of "2 to 6 characters" in `dialogue_writer.py`'s `_CAST_SYSTEM_PROMPT` was too low for a real story the owner wrote (8 genuinely distinct speaking roles - protagonist, his own mother and father, his ex-wife, her father, his sister, a taxi driver, a neighbor). Forcing a 6-character cap on an 8-speaker story would have made the model merge two characters into one, misattributing a real quoted line to the wrong speaker - exactly the correctness `/full` exists to guarantee. Raised to 10.
 
 **Fixed**: `split_for_telegram()` (`conversation.py`) chunks any outgoing text at the last real newline before a conservative 4000-character limit (kept below the real 4096 cap for margin, since Telegram is reported - not officially documented - to count each newline as 2 of the 4096), falling back to a hard split only when a single run has no newline to break on at all. `runner.py`'s `_send_reply` now sends every chunk in order, with the reply's buttons attached only to the last one. Covered by `tests/test_bot_conversation.py` (under-limit text stays one chunk, a long real-shaped text splits with no chunk over the limit and rejoins back to the exact original, a newline-free run hard-splits cleanly, the real default limit stays under 4096). Mutation-tested: reverting `conversation.py` makes the whole test module fail to import (the function doesn't exist at all without the fix) - restored, confirmed the full 145-test suite green.
+
+## Silent quote-count corruption - a real story's lines went missing with no error (2026-10-20)
+
+Real incident, found from the owner's own screenshot: `/full` on a real 8-scene, ~23-real-quote story built a screenplay with only 15 lines ($6.00 estimate) - fewer than half the real quoted moments in the text - with **no error at all**. A second `/full` sent right after (without resending the story) then failed with "لم أجد أي اقتباس حقيقي" - correct, documented behavior (`handle_full` clears `pending_text` after a successful build - the story has to be resent for a second attempt), not a bug, but confusing on top of the silent undercount.
+
+**Root cause, reproduced, not guessed**: `_QUOTED_MOMENT_PATTERN` (`"[^"]+"` etc.) matches from one quote mark to the next one it finds. If a single quote character anywhere in a long pasted premise is dropped, duplicated, or silently converted by a phone's keyboard/clipboard into a different character while pasting (straight `"` vs curly `“”` are genuinely different characters a mobile autocorrect can swap), the regex does not fail - it just keeps matching from the next stray opening quote all the way to whatever closing quote it finds *next*, silently swallowing every real line in between with zero warning. Reproduced directly:
+
+```python
+>>> pattern.findall('"line one" "line two" رحمها الله" "line four"')
+['"line one"', '"line two"', '" "']
+# "رحمها الله" text in the gap is gone entirely, with no error
+```
+
+This is the exact opposite of the owner's own most-repeated standing rule ("يجب ان ينفذ كل حرف و كل كلمة كتبتها بدون حذف او نقصان" - every letter and word must be used, nothing dropped) - and worse than a loud failure, because nothing in the bot's own reply reveals it happened; the owner only found it by counting.
+
+**Fixed**: `_count_quoted_moments()` now validates the premise's own quote marks BEFORE counting - an odd number of straight `"` quotes, or a mismatched open/close count of curly `“”` or guillemet `«»` quotes, each PROVE at least one quote is unpaired somewhere, and now raise a clear, real error asking the owner to check their text and resend, instead of silently losing whatever fell inside the broken span.
+
+Covered by `tests/test_dialogue_writer.py` (odd straight-quote count, mismatched curly quotes, mismatched guillemets - each asserts the real error and that the model was never even called, matching the "never risk building from a corrupted count" principle the zero-quotes check above already established). Mutation-tested: reverted `dialogue_writer.py`, confirmed all three new tests fail (the mock reasoning client runs out of scripted replies because the model gets called when it shouldn't), restored, confirmed the full 148-test suite green.
+
+**What this does NOT fix**: it cannot recover the lost text or tell the owner which specific quote mark is the problem - only that the count proves one is broken somewhere. The owner still has to visually check the pasted text for a missing or stray quotation mark.

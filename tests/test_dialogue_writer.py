@@ -281,6 +281,44 @@ def test_write_complete_dialogue_screenplay_raises_on_a_premise_with_no_real_quo
     assert reasoning.calls == []  # never even asked the model to invent one
 
 
+def test_write_complete_dialogue_screenplay_raises_on_an_odd_number_of_straight_quotes():
+    # Real incident, 2026-10-20: a real long story's real quote count came
+    # back far lower than the real number of quoted moments in it (15
+    # instead of 23) with NO error at all - reproduced: one mismatched
+    # quote mark anywhere (dropped, duplicated, or mangled by a phone's
+    # keyboard while pasting) makes the pattern silently swallow every
+    # real line between it and the next closing quote it finds. An odd
+    # count of " proves at least one is unpaired somewhere.
+    reasoning = MockAgentReasoningClient(scripted_replies=[])
+    writer = DialogueWriterAgent(reasoning)
+
+    premise = '"سطر أول" "سطر ثان مفقود علامته الأخيرة "سطر ثالث"'  # 5 straight quotes - odd
+    assert premise.count('"') % 2 == 1
+
+    with pytest.raises(DialogueWriterError, match="فردي"):
+        writer.write_complete_dialogue_screenplay("T", premise)
+
+    assert reasoning.calls == []  # never risked building from a corrupted count
+
+
+def test_write_complete_dialogue_screenplay_raises_on_mismatched_curly_quotes():
+    reasoning = MockAgentReasoningClient(scripted_replies=[])
+    writer = DialogueWriterAgent(reasoning)
+
+    premise = "“سطر أول” “سطر ثان بلا إغلاق"  # one closing ” missing
+    with pytest.raises(DialogueWriterError, match="غير متطابقة"):
+        writer.write_complete_dialogue_screenplay("T", premise)
+
+
+def test_write_complete_dialogue_screenplay_raises_on_mismatched_guillemets():
+    reasoning = MockAgentReasoningClient(scripted_replies=[])
+    writer = DialogueWriterAgent(reasoning)
+
+    premise = "«سطر أول» «سطر ثان بلا إغلاق"  # one closing » missing
+    with pytest.raises(DialogueWriterError, match="غير متطابقة"):
+        writer.write_complete_dialogue_screenplay("T", premise)
+
+
 def test_parse_cast_rejects_a_null_field_value():
     # Real bug found by code review, 2026-10-19: the old check only
     # confirmed the keys existed, not that their values were real

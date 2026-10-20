@@ -157,6 +157,42 @@ _QUOTED_MOMENT_PATTERN = re.compile(r"«[^»]+»|\"[^\"]+\"|“[^”]+”")
 
 
 def _count_quoted_moments(premise: str) -> int:
+    # Real incident, 2026-10-20: a real long story's quoted-line count
+    # came back far lower than the real number of quoted moments in it
+    # (15 instead of 23), with no error - reproduced here: if even ONE
+    # quote mark anywhere in the premise is dropped, mismatched, or
+    # converted by a phone's keyboard/clipboard into a different
+    # character while pasting, _QUOTED_MOMENT_PATTERN's "[^"]+" keeps
+    # matching from the next stray opening quote all the way to whatever
+    # closing quote it finds NEXT - silently swallowing every real line
+    # in between with no warning at all. This is the exact opposite of
+    # the owner's own standing rule ("يجب ان ينفذ كل حرف و كل كلمة كتبتها
+    # بدون حذف او نقصان" - every letter and word must be used, nothing
+    # dropped) - a silent undercount is worse than a loud error, because
+    # nothing in the bot's own reply would ever reveal it happened.
+    # An odd count of straight quote marks, or a mismatched guillemet/
+    # curly-quote pair count, both PROVE at least one quote is unpaired
+    # somewhere - raised here instead of silently losing whatever falls
+    # inside the broken span.
+    straight = premise.count('"')
+    if straight % 2 != 0:
+        raise DialogueWriterError(
+            f"عدد علامات الاقتباس \" في نصك فردي ({straight} علامة) - هذا يعني أن علامة واحدة "
+            "ناقصة أو زائدة في مكان ما، وأي حوار بينها وبين العلامة التالية سيُفقد بصمت بدلاً من "
+            "أن يُستخدم. راجع نصك وتأكد أن كل جملة منقولة محاطة بعلامتي اقتباس كاملتين \" \" ثم أعد الإرسال."
+        )
+    curly_open, curly_close = premise.count("“"), premise.count("”")
+    if curly_open != curly_close:
+        raise DialogueWriterError(
+            f"علامات الاقتباس المنحنية “ ” غير متطابقة في نصك ({curly_open} فتح، {curly_close} إغلاق) - "
+            "نفس خطر فقدان حوار بصمت. راجع نصك وأعد الإرسال."
+        )
+    guillemet_open, guillemet_close = premise.count("«"), premise.count("»")
+    if guillemet_open != guillemet_close:
+        raise DialogueWriterError(
+            f"علامات الاقتباس « » غير متطابقة في نصك ({guillemet_open} فتح، {guillemet_close} إغلاق) - "
+            "نفس خطر فقدان حوار بصمت. راجع نصك وأعد الإرسال."
+        )
     return len(_QUOTED_MOMENT_PATTERN.findall(premise))
 
 
