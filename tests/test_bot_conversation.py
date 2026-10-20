@@ -4,7 +4,7 @@ import json
 
 from src.agents.dialogue_writer import DialogueWriterAgent
 from src.agents.publisher import PublishingAgent
-from src.bot.conversation import ESTIMATED_SECONDS_PER_LINE, BotConversation
+from src.bot.conversation import ESTIMATED_SECONDS_PER_LINE, BotConversation, TELEGRAM_MESSAGE_LIMIT, split_for_telegram
 from src.integrations.publishing_client import MockPublishingClient
 from src.integrations.reasoning_client import MockAgentReasoningClient
 from src.models import Character, DialogueLine, DialogueScreenplay, ProducedDialogueClip, ProducedDialogueEpisode
@@ -405,3 +405,43 @@ def test_chats_are_independent():
 
     reply1 = conversation.handle_edit("chat1", "1 x")
     assert "chat2 beat" not in reply1.text
+
+
+def test_split_for_telegram_returns_the_whole_text_as_one_chunk_when_under_the_limit():
+    assert split_for_telegram("short text") == ["short text"]
+
+
+def test_split_for_telegram_splits_long_text_at_a_real_newline_boundary():
+    # Real gap found, 2026-10-20: the Bot API's own sendMessage rejects
+    # any text over its real 4096-character limit outright rather than
+    # splitting it - a long screenplay or produced-result message had no
+    # chunking logic anywhere. A test that only checks the result has
+    # more than one chunk would pass even if a chunk were cut mid-word -
+    # it must assert no chunk exceeds the real limit AND that rejoining
+    # the chunks reconstructs the original text exactly.
+    line = "سطر حوار طويل بما فيه الكفاية ليتكرر ويتجاوز الحد الحقيقي لرسائل تيليجرام\n"
+    text = line * 200  # well over TELEGRAM_MESSAGE_LIMIT
+
+    chunks = split_for_telegram(text, limit=100)
+
+    assert len(chunks) > 1
+    assert all(len(c) <= 100 for c in chunks)
+    # Rejoining with the real newline the splitter consumed between chunks
+    # must reconstruct the original text exactly - no content lost or duplicated.
+    assert "\n".join(chunks) == text
+
+
+def test_split_for_telegram_hard_splits_when_a_single_chunk_has_no_newline():
+    text = "x" * 250  # one unbroken run, no newline to break on at all
+
+    chunks = split_for_telegram(text, limit=100)
+
+    assert [len(c) for c in chunks] == [100, 100, 50]
+    assert "".join(chunks) == text
+
+
+def test_split_for_telegram_default_limit_stays_under_the_real_bot_api_cap():
+    # The real Bot API cap is 4096 - TELEGRAM_MESSAGE_LIMIT must stay
+    # comfortably under it (margin for Telegram's own real newline
+    # counting, per real developer reports), never at or above it.
+    assert TELEGRAM_MESSAGE_LIMIT < 4096

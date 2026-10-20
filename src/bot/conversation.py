@@ -71,6 +71,43 @@ DEFAULT_TARGET_SECONDS = 60.0
 # pick a reasonable line_count up front.
 ESTIMATED_SECONDS_PER_LINE = 4.0
 
+# Real gap found, 2026-10-20 ("لماذا النهاية متقطعة في البوت؟ لماذا لا
+# يكون كله في ميساج واحد؟" - why is the ending cut off in the bot, why
+# isn't it all in one message?): the comment above about a real ~900-word
+# story arriving cut off describes Telegram's own CLIENT auto-splitting
+# what a human TYPES into the app (the incoming direction, already
+# handled by handle_plain_text's accumulation). The Bot API's own
+# sendMessage call the BOT uses to reply is different and was never
+# covered: it has the same real 4096-character limit, but does not split
+# for you - it rejects the whole call outright ("Bad Request: message is
+# too long"). A long screenplay or a produced-result message with many
+# failed/skipped lines could hit this with no chunking logic anywhere -
+# runner.py's _send_reply sent reply.text in one single call. Kept at
+# 4000, not 4096, for margin (Telegram counts each newline as 2 of the
+# 4096, per real developer reports - not officially documented, so this
+# stays conservative rather than cutting it exactly at the edge).
+TELEGRAM_MESSAGE_LIMIT = 4000
+
+
+def split_for_telegram(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> list[str]:
+    """Splits text into chunks the Bot API will actually accept, breaking
+    at the last newline before the limit when one exists so a sentence or
+    a screenplay line is never cut mid-word - only falling back to a hard
+    cut when a single chunk has no newline to break on at all."""
+    if len(text) <= limit:
+        return [text]
+    chunks: list[str] = []
+    remaining = text
+    while len(remaining) > limit:
+        split_at = remaining.rfind("\n", 0, limit)
+        if split_at <= 0:
+            split_at = limit
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:].lstrip("\n")
+    if remaining:
+        chunks.append(remaining)
+    return chunks
+
 
 @dataclass
 class BotReply:

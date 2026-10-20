@@ -112,7 +112,17 @@ Rules:
   - "appearance": a short (one sentence, English) physical description for generating a reference photo of THIS character - hair color/style, build, any distinguishing feature the premise mentions. If the premise gives no physical detail, invent a plausible, ordinary one consistent with their gender/age/role - never leave this generic or reuse the exact same wording for two different characters in the same cast.
 - Only characters who actually SPEAK a line - no narrators, no silent background characters.
 - NEVER create a character named/role "narrator", "راوي", "الراوي" or similar. If the premise is written as first-person memoir/narrative prose (e.g. "كنت..."/"I was..."), the person telling it is a REAL character who appears in the scenes and speaks real dialogue - cast them by their actual name if the premise gives one, otherwise by their real role in the story (e.g. "الزوج"/"the husband", "الأب"/"the father") - never as "narrator".
-- 2 to 6 characters, names in the SAME language/script as the premise."""
+- 2 to 10 characters, names in the SAME language/script as the premise."""
+# Real cap found too low, 2026-10-20: a real multi-scene /full premise
+# (8 scenes, 26 real quoted lines) had 8 genuinely distinct speaking
+# roles - protagonist, his own mother and father, his ex-wife, her
+# father, his sister, a taxi driver, a neighbor. The old "2 to 6" cap
+# would have forced the model to either merge two of them into one
+# character (misattributing a real quoted line to the wrong speaker -
+# exactly the correctness /full exists to guarantee) or drop a speaking
+# role's lines entirely. Raised to 10 - a real short film can need more
+# than six speaking parts; found by the first real story that actually
+# needed more, not guessed in advance.
 
 _LINES_SYSTEM_PROMPT = """You are a screenwriter turning a premise and a fixed cast into a real scripted scene - actual dialogue, not narration.
 

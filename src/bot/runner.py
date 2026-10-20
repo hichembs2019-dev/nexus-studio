@@ -69,7 +69,7 @@ from __future__ import annotations
 
 import asyncio
 
-from src.bot.conversation import BotConversation
+from src.bot.conversation import BotConversation, split_for_telegram
 from src.workflows.dialogue_pipeline import DialoguePipeline
 
 
@@ -93,7 +93,19 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         task.add_done_callback(_background_tasks.discard)
 
     async def _send_reply(chat_id: str, context: ContextTypes.DEFAULT_TYPE, reply) -> None:
-        await context.bot.send_message(chat_id=chat_id, text=reply.text, reply_markup=_markup(reply.buttons))
+        # Real gap found, 2026-10-20 ("لماذا النهاية متقطعة... لماذا لا
+        # يكون كله في ميساج واحد؟"): the Bot API's own sendMessage rejects
+        # any text over its real 4096-character limit outright - it does
+        # not split for you. A long screenplay (many lines/characters) or
+        # a produced-result message with several failed/skipped lines
+        # could exceed it, and this call used to send reply.text in one
+        # single, unprotected call. split_for_telegram() chunks it at real
+        # newline boundaries; only the LAST chunk carries the buttons,
+        # since those belong on the message the owner actually acts on.
+        chunks = split_for_telegram(reply.text)
+        for chunk in chunks[:-1]:
+            await context.bot.send_message(chat_id=chat_id, text=chunk)
+        await context.bot.send_message(chat_id=chat_id, text=chunks[-1], reply_markup=_markup(reply.buttons))
         if reply.video_path:
             with open(reply.video_path, "rb") as f:
                 await context.bot.send_video(chat_id=chat_id, video=f)
