@@ -97,6 +97,13 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         if reply.video_path:
             with open(reply.video_path, "rb") as f:
                 await context.bot.send_video(chat_id=chat_id, video=f)
+        # Real incident, 2026-10-20: when the final merge fails,
+        # format_produced() now hands back every real, already-paid clip
+        # individually instead of only describing them in text - send each
+        # one, or the fix there is inert.
+        for clip_path in reply.video_paths:
+            with open(clip_path, "rb") as f:
+                await context.bot.send_video(chat_id=chat_id, video=f)
 
     async def _produce_and_notify(chat_id: str, screenplay, context: ContextTypes.DEFAULT_TYPE) -> None:
         loop = asyncio.get_running_loop()

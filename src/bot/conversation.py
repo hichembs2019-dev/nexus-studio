@@ -52,7 +52,7 @@ same as `/new`.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from src.agents.dialogue_writer import DialogueWriterAgent
 from src.agents.publisher import PublishingAgent
@@ -76,6 +76,13 @@ ESTIMATED_SECONDS_PER_LINE = 4.0
 class BotReply:
     text: str
     video_path: str | None = None
+    # Real incident, 2026-10-20: when the final merge into one stitched
+    # episode fails, the real individual clips (each one already paid for
+    # and sitting finished on disk) used to simply never reach the owner -
+    # BotReply could only carry a single video. video_paths lets
+    # format_produced hand over every real clip it actually has instead of
+    # silently keeping them on a server the owner has no access to.
+    video_paths: list[str] = field(default_factory=list)
     buttons: list[tuple[str, str]] | None = None
 
 
@@ -212,15 +219,48 @@ class BotConversation:
     def format_produced(self, chat_id: str, produced: ProducedDialogueEpisode) -> BotReply:
         self._states.setdefault(chat_id, _ChatState()).produced = produced
         failed_note = self._format_failed_lines(produced) if produced.failed_lines else ""
+        # Owner's instruction, 2026-10-20: the hard spend ceiling
+        # (Settings.max_episode_cost_usd / DialoguePipeline.max_cost_usd)
+        # stops attempting further lines once reached - the owner must be
+        # told exactly which lines were never attempted (and so never
+        # billed a cent) rather than finding a shorter result unexplained.
+        skipped_note = (
+            f"\n\n🛑 توقف التوليد عند الحد الأقصى للتكلفة قبل محاولة {len(produced.skipped_lines)} سطر "
+            f"(لم تُصرف أي أموال عليها): {', '.join(str(l.index + 1) for l in produced.skipped_lines)}"
+            if produced.skipped_lines
+            else ""
+        )
         if produced.stitched_path is None:
+            # Real incident, 2026-10-20: a real $8.18 run's clips were all
+            # genuinely finished, but the merge step failed and the owner
+            # received NEITHER the stitched video NOR the individual real
+            # clips it already paid for - "تعذّر دمجها" with no video
+            # attached at all. When there is at least one real finished
+            # clip, every one of them is sent individually (video_paths)
+            # instead of only ever being described in text, and the real
+            # merge failure reason (produced.stitch_error) is shown so a
+            # repeat is diagnosable rather than just "تعذّر دمجها" again.
+            stitch_note = f"\n\nسبب فشل الدمج: {produced.stitch_error}" if produced.stitch_error else ""
+            if produced.clips:
+                return BotReply(
+                    text=(
+                        f"⚠️ تم توليد {len(produced.clips)} مقطع حقيقي بنجاح (التكلفة الحقيقية "
+                        f"${produced.total_cost_usd:.3f}) لكن تعذّر دمجها في فيديو واحد - "
+                        f"كل مقطع مُرسل أدناه منفصلًا.{stitch_note}{failed_note}{skipped_note}"
+                    ),
+                    video_paths=[c.local_path for c in produced.clips],
+                )
             return BotReply(
                 text=(
-                    f"تم توليد {len(produced.clips)} مقطع لكن تعذّر دمجها. "
-                    f"التكلفة الحقيقية حتى الآن: ${produced.total_cost_usd:.3f}{failed_note}"
+                    f"تم توليد 0 مقطع. التكلفة الحقيقية حتى الآن: ${produced.total_cost_usd:.3f}"
+                    f"{stitch_note}{failed_note}{skipped_note}"
                 )
             )
         return BotReply(
-            text=f"✅ تم. {len(produced.clips)} مقطع حوار، التكلفة الحقيقية ${produced.total_cost_usd:.3f}.{failed_note}",
+            text=(
+                f"✅ تم. {len(produced.clips)} مقطع حوار، التكلفة الحقيقية "
+                f"${produced.total_cost_usd:.3f}.{failed_note}{skipped_note}"
+            ),
             video_path=produced.stitched_path,
             buttons=[("📤 نشر على YouTube", "publish:youtube"), ("🗑️ تجاهل", "discard")],
         )

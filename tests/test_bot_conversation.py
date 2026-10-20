@@ -253,17 +253,58 @@ def test_format_produced_offers_publish_buttons_when_stitched():
     assert "0.400" in reply.text
 
 
-def test_format_produced_without_a_stitched_path_reports_cost_without_buttons():
+def test_format_produced_without_a_stitched_path_still_delivers_the_real_paid_clips():
+    # Real incident, 2026-10-20: a real $8.18 run's clips all genuinely
+    # finished, but the merge step failed, and the owner received NEITHER
+    # the stitched video NOR the individual clips it already paid for -
+    # this test used to assert exactly that (video_path is None, no video
+    # at all) as the CORRECT behavior. It is not: real, already-paid
+    # clips must reach the owner even when merging into one file fails.
     conversation, _ = _conversation([])
     screenplay = DialogueScreenplay(title="T", premise="p", characters=[], lines=[])
     clip = ProducedDialogueClip(line=DialogueLine(index=0, character="X", line="hi"), local_path="/tmp/c0.mp4", cost_usd=0.4)
-    produced = ProducedDialogueEpisode(screenplay=screenplay, clips=[clip], stitched_path=None)
+    produced = ProducedDialogueEpisode(
+        screenplay=screenplay, clips=[clip], stitched_path=None, stitch_error="ffmpeg dialogue concat failed: real reason"
+    )
 
     reply = conversation.format_produced("chat1", produced)
 
     assert reply.video_path is None
+    assert reply.video_paths == ["/tmp/c0.mp4"]
     assert reply.buttons is None
     assert "تعذّر دمجها" in reply.text
+    assert "real reason" in reply.text
+
+
+def test_format_produced_with_zero_clips_and_no_stitched_path_reports_cost_without_a_video():
+    conversation, _ = _conversation([])
+    screenplay = DialogueScreenplay(title="T", premise="p", characters=[], lines=[])
+    produced = ProducedDialogueEpisode(screenplay=screenplay, clips=[], stitched_path=None)
+
+    reply = conversation.format_produced("chat1", produced)
+
+    assert reply.video_path is None
+    assert reply.video_paths == []
+    assert reply.buttons is None
+
+
+def test_format_produced_reports_lines_skipped_by_the_hard_cost_ceiling():
+    # Owner's instruction, 2026-10-20: lines the ceiling stopped before
+    # they were ever attempted must be visible by number, distinct from a
+    # real attempt that failed (failed_lines) - the owner needs to know
+    # these never spent a cent, not that they errored.
+    conversation, _ = _conversation([])
+    screenplay = DialogueScreenplay(title="T", premise="p", characters=[], lines=[])
+    clip = ProducedDialogueClip(line=DialogueLine(index=0, character="X", line="hi"), local_path="/tmp/c0.mp4", cost_usd=0.4)
+    skipped_line = DialogueLine(index=1, character="X", line="never attempted")
+    produced = ProducedDialogueEpisode(
+        screenplay=screenplay, clips=[clip], stitched_path="/tmp/out.mp4", skipped_lines=[skipped_line]
+    )
+
+    reply = conversation.format_produced("chat1", produced)
+
+    assert "توقف التوليد عند الحد الأقصى" in reply.text
+    assert "2" in reply.text  # 1-indexed line number, not the 0-indexed .index
 
 
 def test_format_produced_reports_failed_lines_by_number():

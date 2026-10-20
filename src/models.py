@@ -147,6 +147,23 @@ class ProducedDialogueEpisode:
     # everything, so the owner gets back whatever real money actually
     # bought, not nothing.
     failed_lines: list[tuple[DialogueLine, str]] = field(default_factory=list)
+    # Real incident, 2026-10-20: a real run billed $8.18 (40.91s of real
+    # completed fal.ai output, confirmed from fal.ai's own Usage page) for
+    # clips that genuinely finished - then the final ffmpeg merge step
+    # failed, and that exception used to escape DialoguePipeline.produce()
+    # entirely uncaught, discarding every one of those already-paid clips
+    # and surfacing a message that said nothing completed. stitch_error
+    # carries the real merge failure reason once that is caught instead,
+    # so the owner is told the truth (real clips exist, merging failed,
+    # here is why) instead of a false "nothing completed".
+    stitch_error: str | None = None
+    # Owner's instruction, 2026-10-20: a hard real-money ceiling per run,
+    # separate from the cost estimate shown before Approve. Lines never
+    # attempted because the ceiling was already reached land here (not
+    # failed_lines, which is for a real attempt that failed) so the owner
+    # can see exactly which lines were skipped and why, with zero real
+    # fal.ai spend against any of them.
+    skipped_lines: list[DialogueLine] = field(default_factory=list)
 
     @property
     def total_cost_usd(self) -> float:

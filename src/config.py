@@ -27,6 +27,17 @@ class Settings:
     azure_tts_lang: str
     fal_key: str
     output_dir: str
+    # Owner's instruction, 2026-10-20 ("قلت لك ضع له كود يشتغل و يسحب
+    # المال الا عند صنع فيديو" - I told you to put code in that only
+    # draws money when a video is actually made): fal.ai itself already
+    # only bills for real completed output (confirmed live: a job that
+    # times out costs $0.000, see docs/SOURCES.md "fal.ai job timeout").
+    # This is a SEPARATE, additional guard: a hard ceiling on total real
+    # spend within one production run, so a long or malformed screenplay
+    # can never silently run the real bill past what the owner is willing
+    # to lose in one sitting, independent of the cost estimate already
+    # shown before Approve.
+    max_episode_cost_usd: float
 
     @property
     def comfyui_configured(self) -> bool:
@@ -86,4 +97,5 @@ class Settings:
             azure_tts_lang=os.environ.get("AZURE_TTS_LANG", "ar-SY"),
             fal_key=os.environ.get("FAL_KEY", ""),
             output_dir=os.environ.get("OUTPUT_DIR", "./output"),
+            max_episode_cost_usd=float(os.environ.get("MAX_EPISODE_COST_USD", "10.0")),
         )

@@ -856,3 +856,27 @@ Real failure reported by the owner with evidence from three sources at once: two
 Covered by `tests/test_fal_video_client.py::test_generate_speech_to_video_cancels_the_real_job_on_a_real_timeout`, which fakes `time.monotonic()` to reach the deadline after exactly one poll (no real 1200s wait in the test) and asserts the real `cancel_url` was PUT. Mutation-tested: reverted the fix, confirmed the test fails with the old `600s` message, restored, confirmed the full 124-test suite green.
 
 **What this does NOT fix**: if fal.ai's own queue is genuinely overloaded well past 1200s, a job can still time out - this raises the margin to match real-world timing, it does not guarantee completion. The owner should retry the specific failed line with `/edit` rather than re-running the whole screenplay, which is exactly what the per-line `failed_lines` reporting (see above) exists for.
+
+## Merge-failure clip loss and a hard spend ceiling (2026-10-20)
+
+**Real incident the owner reported**: fal.ai's own Usage page showed $8.18 billed for 40.91s of real completed `fal-ai/wan/v2.2-14b/speech-to-video` output, but the owner never received any video from the bot ("قلت لك لم استلم شيء").
+
+**Root cause, read from the code, not guessed**: `DialoguePipeline.produce()`'s final merge step -
+
+```python
+stitched_path = self._stitch(clips, slug) if len(clips) > 1 else (clips[0].local_path if clips else None)
+```
+
+- sat *outside* the per-line `try/except` that already protects real, already-paid clips from a later line's failure (see "Clips discarded on partial pipeline failure" above). When `_stitch()` (an `ffmpeg concat` call) raised for any reason, that exception escaped `produce()` entirely, was caught generically by `runner.py`'s `_produce_and_notify`, and reached the owner as "❌ فشل التوليد الحقيقي ... لم يكتمل أي مقطع" - **false** whenever clips had genuinely finished and been billed, and worse than useless: it actively hid that real money had bought something real which was simply never handed over.
+
+**Fixed**: the merge call is now wrapped in its own `try/except` inside `produce()`. On a merge failure, `ProducedDialogueEpisode` is still returned with every real clip intact, `stitched_path=None`, and the real failure reason in the new `stitch_error` field. `BotReply` gained `video_paths: list[str]` (plural) alongside the existing single `video_path`, and `format_produced()` now sends every real, already-paid clip individually when merging fails, instead of describing them in text with no video attached at all. `runner.py`'s `_send_reply` sends each one.
+
+Covered by `tests/test_dialogue_pipeline.py::test_produce_keeps_real_paid_clips_when_the_final_merge_fails` (fakes a real `ffmpeg concat` failure via `subprocess.run`, asserts both real clips and the real error message survive) and `tests/test_bot_conversation.py::test_format_produced_without_a_stitched_path_still_delivers_the_real_paid_clips` (asserts `reply.video_paths` actually carries the real clip paths). Mutation-tested: reverted both files, confirmed all new/changed tests fail with real assertion/attribute errors, restored, confirmed the full 128-test suite green.
+
+**Separately, the owner's own standing instruction, repeated explicitly** ("قلت لك ضع له كود يشتغل و يسحب المال الا عند صنع فيديو" - put code in that only draws money when a video is actually made): fal.ai itself already only bills for real completed output - confirmed live twice now (the two $0.000 timeout failures above, and this incident's own $8.18 matching exactly 40.91 real completed seconds, not a single cent for either earlier timeout). That was never the actual gap. The actual gap was a **second, independent** request: a hard ceiling on total real spend *within one production run*, enforced in code, separate from the cost estimate already shown before Approve.
+
+Added: `Settings.max_episode_cost_usd` (env `MAX_EPISODE_COST_USD`, default `10.0`), passed into `DialoguePipeline(max_cost_usd=...)`. Before attempting each line, `produce()` now checks total real spend so far against the ceiling; once reached, every remaining line is skipped **without ever calling fal.ai** - zero further real money spent - and lands in the new `skipped_lines` field (distinct from `failed_lines`, which is for a real attempt that failed, not one never attempted). `format_produced()` reports skipped line numbers explicitly so a shorter-than-expected result is never unexplained.
+
+The ceiling is checked *before*, not after, a line - a line's real cost is only known once fal.ai has actually run it, so the guard cannot predict and block the exact line that would cross the ceiling; it guarantees no *further* line is attempted once already over it, capping runaway spend to at most one line's cost past the configured limit rather than leaving it unbounded.
+
+Covered by `tests/test_dialogue_pipeline.py::test_produce_stops_spending_once_the_hard_cost_ceiling_is_reached` (asserts the real fal.ai client is called exactly once, not three times, against a 3-line screenplay with a ceiling below one line's cost) and `tests/test_bot_conversation.py::test_format_produced_reports_lines_skipped_by_the_hard_cost_ceiling`. Mutation-tested the same way; full suite green at 128/128.

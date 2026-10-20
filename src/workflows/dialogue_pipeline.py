@@ -70,12 +70,20 @@ class DialoguePipeline:
         *,
         tts_lang: str = "ar-SY",
         resolution: str = "480p",
+        max_cost_usd: float | None = None,
     ):
         self._fal_video = fal_video
         self._tts = tts
         self._output_dir = output_dir
         self._tts_lang = tts_lang
         self._resolution = resolution
+        # Owner's instruction, 2026-10-20 ("قلت لك ضع له كود يشتغل و يسحب
+        # المال الا عند صنع فيديو" - put code in that only draws money
+        # when a video is actually made): a hard ceiling on total real
+        # spend within one run, separate from the cost estimate already
+        # shown before Approve - so a long or malformed screenplay can
+        # never silently run the real bill past what was agreed to.
+        self._max_cost_usd = max_cost_usd
 
     def produce(self, screenplay: DialogueScreenplay) -> ProducedDialogueEpisode:
         os.makedirs(self._output_dir, exist_ok=True)
@@ -84,7 +92,16 @@ class DialoguePipeline:
 
         clips: list[ProducedDialogueClip] = []
         failed_lines: list[tuple] = []
+        skipped_lines: list = []
+        spent_so_far = 0.0
         for line in screenplay.lines:
+            if self._max_cost_usd is not None and spent_so_far >= self._max_cost_usd:
+                # The ceiling was already reached by an earlier real,
+                # already-paid line - this and every remaining line is
+                # never attempted, so zero further real money is spent.
+                skipped_lines.append(line)
+                continue
+
             character = characters_by_name.get(line.character)
             if character is None:
                 raise DialoguePipelineError(f"Line {line.index} speaker {line.character!r} is not in the cast")
@@ -143,6 +160,7 @@ class DialoguePipeline:
                 duration = _ffprobe_duration(clip_path)
                 cost = duration * PRICE_PER_SECOND_USD[self._resolution]
                 clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
+                spent_so_far += cost
             except Exception as exc:
                 message = str(exc)
                 if billed:
@@ -150,8 +168,33 @@ class DialoguePipeline:
                 failed_lines.append((line, message))
                 continue
 
-        stitched_path = self._stitch(clips, slug) if len(clips) > 1 else (clips[0].local_path if clips else None)
-        return ProducedDialogueEpisode(screenplay=screenplay, clips=clips, stitched_path=stitched_path, failed_lines=failed_lines)
+        # Real incident, 2026-10-20: a real run paid for and finished
+        # 40.91s of real clips ($8.18, confirmed from fal.ai's own Usage
+        # page), then this merge step raised - and because it sat outside
+        # every try/except above, the exception escaped produce() entirely,
+        # discarding every one of those real, already-paid, already-on-disk
+        # clips. The owner was told "فشل التوليد الحقيقي ... لم يكتمل أي
+        # مقطع" (nothing completed) - false, and worse than useless: it hid
+        # the fact that real money had already bought something real that
+        # was just never handed over. Only the stitch call itself needed
+        # catching - a bad screenplay (checks at the top of this method)
+        # still aborts everything, because continuing would just repeat
+        # the same structural error on every line.
+        stitched_path: str | None
+        stitch_error: str | None = None
+        try:
+            stitched_path = self._stitch(clips, slug) if len(clips) > 1 else (clips[0].local_path if clips else None)
+        except Exception as exc:
+            stitched_path = None
+            stitch_error = str(exc)
+        return ProducedDialogueEpisode(
+            screenplay=screenplay,
+            clips=clips,
+            stitched_path=stitched_path,
+            failed_lines=failed_lines,
+            stitch_error=stitch_error,
+            skipped_lines=skipped_lines,
+        )
 
     def _stitch(self, clips: list[ProducedDialogueClip], slug: str) -> str:
         list_path = os.path.join(self._output_dir, f"{slug}_dialogue_concat_list.txt")

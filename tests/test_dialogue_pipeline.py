@@ -120,6 +120,95 @@ def test_produce_multi_line_stitches_clips_in_order(tmp_path):
     assert produced.total_cost_usd == pytest.approx(2 * 1.0 * 0.10)
 
 
+def test_produce_keeps_real_paid_clips_when_the_final_merge_fails(tmp_path, monkeypatch):
+    # Real incident, 2026-10-20: a real run paid for and finished 40.91s
+    # of real clips ($8.18, confirmed from fal.ai's own Usage page), then
+    # this merge step raised - and because it used to sit outside every
+    # try/except, the exception escaped produce() entirely and discarded
+    # every one of those real, already-paid, already-on-disk clips. A test
+    # that only checks produce() doesn't crash would still pass with the
+    # clips thrown away - it must assert the real clips and the real
+    # error both survive.
+    ref_path = str(tmp_path / "ref.jpg")
+    _ref_image(ref_path)
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    tts = MockTTSClient()
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path))
+    screenplay = DialogueScreenplay(
+        title="Dinner",
+        premise="p",
+        characters=[Character(name="A", reference_image_path=ref_path), Character(name="B", reference_image_path=ref_path)],
+        lines=[
+            DialogueLine(index=0, character="A", line="one", action="a1"),
+            DialogueLine(index=1, character="B", line="two", action="b1"),
+        ],
+    )
+
+    real_run = subprocess.run
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "ffmpeg" and "concat" in cmd:
+            class _FailedProcess:
+                returncode = 1
+                stderr = "simulated real ffmpeg concat failure"
+                stdout = ""
+            return _FailedProcess()
+        return real_run(cmd, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(produced.clips) == 2
+    assert all(os.path.exists(c.local_path) for c in produced.clips)
+    assert produced.stitched_path is None
+    assert produced.stitch_error is not None
+    assert "simulated real ffmpeg concat failure" in produced.stitch_error
+    assert produced.total_cost_usd == pytest.approx(2 * 1.0 * 0.10)
+
+
+def test_produce_stops_spending_once_the_hard_cost_ceiling_is_reached(tmp_path):
+    # Owner's instruction, 2026-10-20 ("قلت لك ضع له كود يشتغل و يسحب
+    # المال الا عند صنع فيديو" - put code in that only draws money when a
+    # video is actually made): max_cost_usd is a hard ceiling on total
+    # real spend within one run. A test that only checks the ceiling
+    # exists as a number (never compared against anything) would pass
+    # with the guard never actually stopping a real fal.ai call - this
+    # asserts the THIRD line's real call never happens at all.
+    ref_path = str(tmp_path / "ref.jpg")
+    _ref_image(ref_path)
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    tts = MockTTSClient()
+    # Each clip costs 1.0s * $0.10/s (480p) = $0.10. The ceiling is only
+    # ever checked BEFORE a line is attempted (its real cost isn't known
+    # until after fal.ai actually runs it), so a ceiling below one line's
+    # cost is what proves the check fires at all: the first line still
+    # goes through (nothing spent yet to compare), every line after it
+    # must not.
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), max_cost_usd=0.05)
+    screenplay = DialogueScreenplay(
+        title="Dinner",
+        premise="p",
+        characters=[Character(name="A", reference_image_path=ref_path)],
+        lines=[
+            DialogueLine(index=0, character="A", line="one", action="a1"),
+            DialogueLine(index=1, character="A", line="two", action="a2"),
+            DialogueLine(index=2, character="A", line="three", action="a3"),
+        ],
+    )
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(fal_video.calls) == 1
+    assert len(produced.clips) == 1
+    assert [l.index for l in produced.skipped_lines] == [1, 2]
+    assert produced.total_cost_usd == pytest.approx(0.10)
+
+
 def test_produce_rejects_a_line_whose_speaker_is_not_in_the_cast(tmp_path):
     pipeline = DialoguePipeline(MockFalVideoClient(), MockTTSClient(), str(tmp_path))
     screenplay = DialogueScreenplay(

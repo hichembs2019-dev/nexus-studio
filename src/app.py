@@ -118,7 +118,9 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
         fal_video = RealFalVideoClient(settings.fal_key)
         dialogue_writer = DialogueWriterAgent(reasoning)
         dialogue_pipeline = DialoguePipeline(
-            fal_video, tts, settings.output_dir, tts_lang=settings.azure_tts_lang,
+            fal_video, tts, settings.output_dir,
+            tts_lang=settings.azure_tts_lang,
+            max_cost_usd=settings.max_episode_cost_usd,
         )
     elif force_mocks:
         fal_video = MockFalVideoClient()
