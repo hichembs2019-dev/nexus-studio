@@ -106,9 +106,13 @@ message however it is phrased, free conversation included.
 from __future__ import annotations
 
 import asyncio
+import logging
+import os
 
 from src.bot.conversation import BotConversation, split_for_telegram
 from src.workflows.dialogue_pipeline import DialoguePipeline
+
+logger = logging.getLogger("nexus_studio.runner")
 
 
 def _markup(buttons):
@@ -173,6 +177,27 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         if existing is not None:
             existing.cancel()
 
+    async def _notify_or_log(chat_id: str, context: ContextTypes.DEFAULT_TYPE, text: str) -> None:
+        # Real gap found by code review, 2026-10-21 ("تسحب الرصيد بدون اي
+        # فيديو" - the balance gets withdrawn with no video ever arriving):
+        # every failure-reporting send_message() in this file used to be
+        # called bare. If THAT call itself raises (Telegram rate-limit, a
+        # transient network error, anything - the exact ordinary real-world
+        # failures this whole file exists to survive), the exception
+        # propagates out of a bare asyncio.create_task() with nothing
+        # catching it (these tasks are not dispatched through the
+        # Application, so add_error_handler never sees them) - total
+        # silence, AFTER real fal.ai money may already have been spent.
+        # This is the last line of defense: if even this fails, the
+        # failure is at least logged (nexus_studio.runner, same pattern as
+        # reasoning_client.py's Groq-failure-visibility fix) so the
+        # deploy workflow's own log tail can show it, instead of the task
+        # vanishing with absolutely no trace anywhere.
+        try:
+            await context.bot.send_message(chat_id=chat_id, text=text)
+        except Exception as exc:
+            logger.error("Failed to notify chat %s (message not delivered): %s | original text: %s", chat_id, exc, text)
+
     async def _route_after_debounce(chat_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await asyncio.sleep(_TEXT_DEBOUNCE_SECONDS)
@@ -214,10 +239,21 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         try:
             reply = await loop.run_in_executor(None, conversation.handle_message, chat_id, "")
         except Exception as exc:
-            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ تعذّر فهم رسالتك بسبب خطأ تقني: {exc}")
+            await _notify_or_log(chat_id, context, f"⚠️ تعذّر فهم رسالتك بسبب خطأ تقني: {exc}")
             return
         if reply.text:
-            await _send_reply(chat_id, context, reply)
+            # Real gap found by code review, 2026-10-21: this call used to
+            # be unprotected - if _send_reply itself raised (the same
+            # Telegram-delivery-failure class _notify_or_log above exists
+            # for), the exception died unretrieved in this bare task, and
+            # the owner who had just typed something got total silence
+            # with no error message at all - the identical shape as the
+            # real-money incident, just without money attached here.
+            try:
+                await _send_reply(chat_id, context, reply)
+            except Exception as exc:
+                logger.error("Failed to deliver reply to chat %s: %s", chat_id, exc)
+                await _notify_or_log(chat_id, context, f"⚠️ تعذّر إرسال الرد إليك بسبب خطأ تقني: {exc}")
 
     async def _send_reply(chat_id: str, context: ContextTypes.DEFAULT_TYPE, reply) -> None:
         # Real gap found, 2026-10-20 ("لماذا النهاية متقطعة... لماذا لا
@@ -233,25 +269,44 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         for chunk in chunks[:-1]:
             await context.bot.send_message(chat_id=chat_id, text=chunk)
         await context.bot.send_message(chat_id=chat_id, text=chunks[-1], reply_markup=_markup(reply.buttons))
+        # Real gap found by code review, 2026-10-21: a failure on clip N
+        # used to abort this loop entirely and propagate an exception that
+        # _produce_and_notify's except block reported as "فشل إرسال
+        # الفيديو إليك" (the video failed to reach you) - false and
+        # misleading whenever clips before N had already sent
+        # successfully and were genuinely sitting in the owner's chat.
+        # Every clip is now attempted regardless of an earlier one's
+        # failure, and the failures (if any) are collected and reported
+        # by name - never a blanket claim that contradicts what the
+        # owner's own chat already shows.
+        send_failures: list[str] = []
         if reply.video_path:
-            with open(reply.video_path, "rb") as f:
-                await context.bot.send_video(chat_id=chat_id, video=f)
+            try:
+                with open(reply.video_path, "rb") as f:
+                    await context.bot.send_video(chat_id=chat_id, video=f)
+            except Exception as exc:
+                send_failures.append(f"{os.path.basename(reply.video_path)}: {exc}")
         # Real incident, 2026-10-20: when the final merge fails,
         # format_produced() now hands back every real, already-paid clip
         # individually instead of only describing them in text - send each
         # one, or the fix there is inert.
         for clip_path in reply.video_paths:
-            with open(clip_path, "rb") as f:
-                await context.bot.send_video(chat_id=chat_id, video=f)
+            try:
+                with open(clip_path, "rb") as f:
+                    await context.bot.send_video(chat_id=chat_id, video=f)
+            except Exception as exc:
+                send_failures.append(f"{os.path.basename(clip_path)}: {exc}")
+        if send_failures:
+            raise RuntimeError("some clips did not reach you: " + "; ".join(send_failures))
 
     async def _produce_and_notify(chat_id: str, screenplay, context: ContextTypes.DEFAULT_TYPE) -> None:
         loop = asyncio.get_running_loop()
         try:
             produced = await loop.run_in_executor(None, dialogue_pipeline.produce, screenplay)
         except Exception as exc:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=f"❌ فشل التوليد الحقيقي: {exc}\n\nلم يكتمل أي مقطع - تحقق من رصيد fal.ai الحقيقي قبل إعادة المحاولة.",
+            await _notify_or_log(
+                chat_id, context,
+                f"❌ فشل التوليد الحقيقي: {exc}\n\nلم يكتمل أي مقطع - تحقق من رصيد fal.ai الحقيقي قبل إعادة المحاولة.",
             )
             return
         # Real gap found by code review, 2026-10-20 (the owner's own
@@ -270,12 +325,10 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
             reply = conversation.format_produced(chat_id, produced)
             await _send_reply(chat_id, context, reply)
         except Exception as exc:
-            await context.bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    f"⚠️ اكتمل التوليد الحقيقي (التكلفة ${produced.total_cost_usd:.3f}، "
-                    f"{len(produced.clips)} مقطع) لكن فشل إرسال الفيديو إليك: {exc}"
-                ),
+            await _notify_or_log(
+                chat_id, context,
+                f"⚠️ اكتمل التوليد الحقيقي (التكلفة ${produced.total_cost_usd:.3f}، "
+                f"{len(produced.clips)} مقطع) لكن فشل إرسال الفيديو إليك: {exc}",
             )
 
     async def _new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -411,10 +464,18 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
             chat_id = update.effective_chat.id
         if chat_id is None:
             return
+        # Real gap found by code review, 2026-10-21: this used to swallow
+        # a failure of the notification itself with a bare `except: pass`
+        # - not even logged. This is the Application's own LAST-RESORT
+        # handler, reachable from every CommandHandler/CallbackQueryHandler
+        # (/new, /full, /edit, /caption, the approve/publish buttons) -
+        # silently dropping its own failure here is the same "total
+        # silence" shape _notify_or_log above exists to prevent, just in
+        # the one place meant to be the final safety net.
         try:
             await context.bot.send_message(chat_id=chat_id, text=f"❌ حدث خطأ حقيقي غير متوقع: {context.error}")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error("Failed to notify chat %s of error %s: %s", chat_id, context.error, exc)
 
     application = Application.builder().token(bot_token).build()
     application.add_error_handler(_on_error)
