@@ -47,3 +47,20 @@ jobs:
             docker compose up -d --build nexus-studio
             sleep 8
             docker compose logs --tail=30 nexus-studio
+            # Owner's own real question, 2026-10-21 ("و اين groq؟ اليس
+            # واحد منهم احتياطي؟" - where is Groq, isn't one of them the
+            # backup?): .env lives only on this real droplet, never in
+            # GitHub (gitignored, never committed) and never readable from
+            # a coding session with no SSH access to this server - the
+            # only honest way to answer "is this key really configured"
+            # is to check it HERE, on the real deploy run, every time.
+            # Never prints a key's real value - only whether the line in
+            # .env has anything after the "=" at all.
+            echo "=== real key presence in .env (values never printed) ==="
+            for k in GROQ_API_KEY GEMINI_API_KEY FAL_KEY AZURE_SPEECH_KEY TELEGRAM_BOT_TOKEN; do
+              if grep -q "^${k}=..*" .env 2>/dev/null; then
+                echo "$k: SET"
+              else
+                echo "$k: EMPTY or MISSING"
+              fi
+            done
