@@ -149,6 +149,30 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
     _TEXT_DEBOUNCE_SECONDS = 1.5
     _debounce_tasks: dict[str, asyncio.Task] = {}
 
+    def _cancel_debounce(chat_id: str) -> None:
+        # Real gap found by code review, 2026-10-21, right after the
+        # pending_text race fix above: that fix stops the debounce path
+        # from ever observing or building from stale/empty state, but it
+        # never stopped the debounce task itself from still firing a few
+        # moments after the owner's own explicit /new, /full, /edit or
+        # /caption already ran. If the owner's command finished first,
+        # the debounce call now harmlessly finds nothing to route and
+        # sends nothing - but if the command was still in flight (a real,
+        # slow reasoning-client call), the debounce call could run
+        # concurrently, make its OWN redundant real reasoning-client
+        # call on the same pending text, and - however harmlessly to the
+        # real screenplay itself - send the owner a second, confusing
+        # "أرسل /full أو /new" message right after they just did exactly
+        # that. Any explicit command is a clear sign the owner is driving
+        # this chat directly right now, so it cancels whatever automatic
+        # routing was still waiting - the same reasoning _text() already
+        # applies to a NEW fragment superseding an OLDER one, just
+        # applied to an explicit command superseding the automatic path
+        # entirely.
+        existing = _debounce_tasks.pop(chat_id, None)
+        if existing is not None:
+            existing.cancel()
+
     async def _route_after_debounce(chat_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             await asyncio.sleep(_TEXT_DEBOUNCE_SECONDS)
@@ -265,6 +289,7 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         # once, so everything after the command - every real newline
         # included - reaches handle_new intact.
         chat_id = str(update.effective_chat.id)
+        _cancel_debounce(chat_id)
         raw_text = update.message.text or ""
         parts = raw_text.split(None, 1)
         args_text = parts[1] if len(parts) == 2 else ""
@@ -288,6 +313,7 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         # directly after "/full" lost every real newline to
         # context.args's whitespace tokenization before this.
         chat_id = str(update.effective_chat.id)
+        _cancel_debounce(chat_id)
         raw_text = update.message.text or ""
         parts = raw_text.split(None, 1)
         args_text = parts[1] if len(parts) == 2 else ""
@@ -330,6 +356,7 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         # one right after "/edit"), so everything after it - including
         # every real newline the owner typed - reaches handle_edit intact.
         chat_id = str(update.effective_chat.id)
+        _cancel_debounce(chat_id)
         raw_text = update.message.text or ""
         parts = raw_text.split(None, 1)
         args_text = parts[1] if len(parts) == 2 else ""
@@ -338,11 +365,13 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
 
     async def _caption(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = str(update.effective_chat.id)
+        _cancel_debounce(chat_id)
         reply = conversation.handle_caption(chat_id, " ".join(context.args))
         await _send_reply(chat_id, context, reply)
 
     async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         chat_id = str(update.effective_chat.id)
+        _cancel_debounce(chat_id)
         reply = conversation.handle_cancel(chat_id)
         await _send_reply(chat_id, context, reply)
 
@@ -350,6 +379,7 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         query = update.callback_query
         await query.answer()
         chat_id = str(update.effective_chat.id)
+        _cancel_debounce(chat_id)
         data = query.data
 
         if data == "approve":
@@ -361,8 +391,18 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
             reply = conversation.handle_cancel(chat_id)
             await _send_reply(chat_id, context, reply)
         elif data.startswith("publish:"):
+            # Real bug found by code review, 2026-10-21, same pattern as
+            # /new, /full and the debounce router above: handle_publish()
+            # calls PublishingAgent.publish_episode(), which makes a real,
+            # synchronous upload_video() HTTP call - a real video file
+            # upload to YouTube, which can genuinely take a long time for
+            # anything but a tiny clip. Called directly here, that blocks
+            # the whole bot's event loop - every other chat, every button
+            # press, including another chat's own Approve - for the whole
+            # upload. Same fix, same reason: run it in the executor.
             platform = data.split(":", 1)[1]
-            reply = conversation.handle_publish(chat_id, platform)
+            loop = asyncio.get_running_loop()
+            reply = await loop.run_in_executor(None, conversation.handle_publish, chat_id, platform)
             await _send_reply(chat_id, context, reply)
 
     async def _on_error(update, context: ContextTypes.DEFAULT_TYPE) -> None:
