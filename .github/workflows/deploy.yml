@@ -43,10 +43,21 @@ jobs:
           script: |
             set -e
             cd ~/nexus-studio
-            git pull origin main
-            docker compose up -d --build nexus-studio
-            sleep 8
-            docker compose logs --tail=30 nexus-studio
+            # TEMPORARY read-only diagnostic, 2026-10-21 ("البوت يتباطىء،
+            # لم يجبني بعد مرت ثمانية دقائق" - the bot is slow, no reply
+            # after 8 minutes): the owner is waiting on a real, possibly
+            # still in-flight /full call RIGHT NOW. git pull + docker
+            # compose up -d --build would recreate the container and kill
+            # that in-flight call outright, guaranteeing he never gets a
+            # reply and losing his accumulated state again - the exact
+            # mistake already made twice earlier tonight. This run ONLY
+            # reads the real, current container logs - no restart, no
+            # rebuild, nothing touched - so the real in-progress call is
+            # never disturbed. Restored to the real deploy script right
+            # after this one read.
+            docker compose logs --tail=80 nexus-studio
+            echo "=== ps inside the container (is anything actually running?) ==="
+            docker compose exec -T nexus-studio ps aux || true
             # Owner's own real question, 2026-10-21 ("و اين groq؟ اليس
             # واحد منهم احتياطي؟" - where is Groq, isn't one of them the
             # backup?): .env lives only on this real droplet, never in
