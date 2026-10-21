@@ -172,6 +172,29 @@ class DialoguePipeline:
         # never silently run the real bill past what was agreed to.
         self._max_cost_usd = max_cost_usd
 
+    def save_character_photo(self, title: str, character_name: str, image_bytes: bytes) -> str:
+        """Owner's instruction, 2026-10-21 ("الصور ضعها انت الان و هكذا
+        لا ندفع شيء" - you put the photos in yourself, so we don't pay
+        anything): writes image_bytes directly to the EXACT cache path
+        _resolve_character_photo() checks first
+        (`{output_dir}/characters/{slug(title)}_{slug(character_name)}.jpg`) -
+        the same real cache-hit path a real `produce()` run already
+        trusts unconditionally. A photo saved this way is picked up by
+        the next real production of this screenplay exactly like a
+        previously-generated one would be: zero cost, zero real
+        generation call, because the pipeline never sees a reason to
+        make one. Overwrites any existing cached photo at that path
+        without warning - the caller (runner.py's /photo handler) is the
+        one place that decides this is wanted."""
+        slug = _slug(title)
+        char_slug = _slug(character_name, default="character")
+        cache_dir = os.path.join(self._output_dir, "characters")
+        os.makedirs(cache_dir, exist_ok=True)
+        cache_path = os.path.join(cache_dir, f"{slug}_{char_slug}.jpg")
+        with open(cache_path, "wb") as f:
+            f.write(image_bytes)
+        return cache_path
+
     def produce(self, screenplay: DialogueScreenplay) -> ProducedDialogueEpisode:
         os.makedirs(self._output_dir, exist_ok=True)
         slug = _slug(screenplay.title)

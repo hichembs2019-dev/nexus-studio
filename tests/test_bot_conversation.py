@@ -180,6 +180,39 @@ def test_cancel_clears_pending_text_too():
     assert "الاستخدام" in reply.text
 
 
+def test_get_current_screenplay_returns_none_before_any_screenplay_exists():
+    conversation, _ = _conversation([])
+
+    assert conversation.get_current_screenplay("chat1") is None
+
+
+def test_get_current_screenplay_returns_the_real_approved_draft():
+    # Owner's instruction, 2026-10-21 ("الصور ضعها انت الان و هكذا لا
+    # ندفع شيء"): runner.py's /photo handler needs this to validate an
+    # uploaded character photo's caption against the real character
+    # names in the chat's current screenplay.
+    cast = _cast_reply(("فوزية", "female"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
+    conversation, _ = _conversation([cast, lines])
+
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
+    screenplay = conversation.get_current_screenplay("chat1")
+
+    assert screenplay is not None
+    assert screenplay.characters[0].name == "فوزية"
+
+
+def test_get_current_screenplay_returns_none_after_cancel():
+    cast = _cast_reply(("فوزية", "female"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
+    conversation, _ = _conversation([cast, lines])
+
+    conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
+    conversation.handle_cancel("chat1")
+
+    assert conversation.get_current_screenplay("chat1") is None
+
+
 def test_full_builds_a_screenplay_with_no_duration_and_one_line_per_real_quote():
     # Owner's instruction, 2026-10-19 ("يجب ان ينفذ كل حرف و كل كلمة
     # كتبتها بدون حذف او نقصان" - every letter and word must be used, no

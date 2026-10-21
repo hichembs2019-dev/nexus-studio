@@ -460,6 +460,46 @@ def test_produce_reuses_the_cached_portrait_without_regenerating_on_a_second_cal
     assert second.portrait_cost_usd == 0.0
 
 
+def test_save_character_photo_is_picked_up_as_a_cache_hit_with_zero_real_cost(tmp_path):
+    # Owner's instruction, 2026-10-21 ("الصور ضعها انت الان و هكذا لا
+    # ندفع شيء" - you put the photos in yourself, so we don't pay
+    # anything): save_character_photo() writes to the EXACT path
+    # _resolve_character_photo() checks first - proven here by producing
+    # a real screenplay for this exact character and asserting the
+    # image client is never called and the real cost is $0.
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    image_client = MockImageClient()
+    pipeline = DialoguePipeline(fal_video, MockTTSClient(), str(tmp_path), image_client=image_client)
+    screenplay = DialogueScreenplay(
+        title="Dinner", premise="p",
+        characters=[Character(name="فوزية", appearance="curly dark hair")],
+        lines=[DialogueLine(index=0, character="فوزية", line="one", action="a1")],
+    )
+
+    saved_path = pipeline.save_character_photo("Dinner", "فوزية", b"owner-provided-real-photo-bytes")
+    produced = pipeline.produce(screenplay)
+
+    assert os.path.exists(saved_path)
+    with open(saved_path, "rb") as f:
+        assert f.read() == b"owner-provided-real-photo-bytes"
+    assert len(image_client.calls) == 0  # never generated - the owner's own photo was already cached
+    assert produced.portrait_cost_usd == 0.0
+    sent_image_b64 = fal_video.calls[0]["image_data_uri"].split(",", 1)[1]
+    assert base64.b64decode(sent_image_b64) == b"owner-provided-real-photo-bytes"
+
+
+def test_save_character_photo_overwrites_an_existing_cached_photo(tmp_path):
+    pipeline = DialoguePipeline(MockFalVideoClient(), MockTTSClient(), str(tmp_path), image_client=MockImageClient())
+
+    first_path = pipeline.save_character_photo("Dinner", "A", b"old-photo")
+    second_path = pipeline.save_character_photo("Dinner", "A", b"new-photo")
+
+    assert first_path == second_path
+    with open(second_path, "rb") as f:
+        assert f.read() == b"new-photo"
+
+
 def test_produce_portrait_generation_respects_the_hard_cost_ceiling(tmp_path):
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
 

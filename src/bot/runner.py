@@ -428,6 +428,55 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         reply = conversation.handle_cancel(chat_id)
         await _send_reply(chat_id, context, reply)
 
+    async def _photo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        # Owner's instruction, 2026-10-21 ("الصور ضعها انت الان و هكذا لا
+        # ندفع شيء" - you put the photos in yourself, so we don't pay
+        # anything): a real photo the owner already has for a character
+        # (his own, or any he already paid for elsewhere) can be sent to
+        # the bot directly - captioned with that character's EXACT name
+        # as it appears in the current screenplay - and is saved straight
+        # into DialoguePipeline's own real cache path. The next real
+        # production of this screenplay then finds it already cached,
+        # the exact same way a previously-generated photo would be: zero
+        # cost, zero real image-generation call, no fal.ai/Replicate
+        # request made for this character at all.
+        chat_id = str(update.effective_chat.id)
+        character_name = (update.message.caption or "").strip()
+        if not character_name:
+            await _notify_or_log(
+                chat_id, context,
+                "أرسل اسم الشخصية ككابشن (caption) مع الصورة - بالضبط كما ظهر في السيناريو الحالي.",
+            )
+            return
+        screenplay = conversation.get_current_screenplay(chat_id)
+        if screenplay is None:
+            await _notify_or_log(chat_id, context, "لا يوجد سيناريو حالي لحفظ صورة له - أرسل /new أو /full أولاً.")
+            return
+        if not any(c.name == character_name for c in screenplay.characters):
+            known_names = "، ".join(c.name for c in screenplay.characters)
+            await _notify_or_log(
+                chat_id, context,
+                f"لم أجد شخصية باسم '{character_name}' في السيناريو الحالي. الأسماء الموجودة: {known_names}",
+            )
+            return
+        if dialogue_pipeline is None:
+            await _notify_or_log(chat_id, context, "لا يوجد اتصال حقيقي بخط الإنتاج لحفظ الصورة.")
+            return
+        try:
+            photo_file = await update.message.photo[-1].get_file()
+            photo_bytes = bytes(await photo_file.download_as_bytearray())
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None, dialogue_pipeline.save_character_photo, screenplay.title, character_name, photo_bytes
+            )
+        except Exception as exc:
+            await _notify_or_log(chat_id, context, f"⚠️ فشل حفظ الصورة: {exc}")
+            return
+        await _notify_or_log(
+            chat_id, context,
+            f"✅ تم حفظ صورة '{character_name}' - لن تُولَّد ولن يُدفع أي مبلغ لصورتها بعد الآن في هذا السيناريو.",
+        )
+
     async def _button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         query = update.callback_query
         await query.answer()
@@ -485,5 +534,6 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
     application.add_handler(CommandHandler("caption", _caption))
     application.add_handler(CommandHandler("cancel", _cancel))
     application.add_handler(CallbackQueryHandler(_button))
+    application.add_handler(MessageHandler(filters.PHOTO, _photo))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _text))
     return application

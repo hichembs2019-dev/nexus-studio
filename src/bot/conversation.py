@@ -508,6 +508,16 @@ class BotConversation:
         self._states[chat_id] = _ChatState()
         return BotReply(text="تم إلغاء المسودة.")
 
+    def get_current_screenplay(self, chat_id: str) -> DialogueScreenplay | None:
+        """Owner's instruction, 2026-10-21 ("الصور ضعها انت الان و هكذا
+        لا ندفع شيء"): the one read-only accessor runner.py's /photo
+        handler needs to validate a manually-uploaded character photo
+        against the real current screenplay (does this character name
+        actually exist in it?) before saving it - _states stays private,
+        this is the narrow read the feature actually needs."""
+        state = self._states.get(chat_id)
+        return state.screenplay if state is not None else None
+
     def handle_approve(self, chat_id: str) -> tuple[BotReply, DialogueScreenplay | None]:
         state = self._states.get(chat_id)
         if state is None or state.screenplay is None:
