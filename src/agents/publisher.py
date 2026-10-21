@@ -1,35 +1,29 @@
-"""Publishing Agent: the last step - takes a produced episode's stitched
-video and uploads it to whichever configured platforms the owner names.
-No reasoning call here (unlike Writer/Director) - title/description come
-straight from the Episode/DialogueScreenplay the owner already approved.
+"""Publishing Agent: the last step - takes a produced dialogue episode's
+stitched video and uploads it to whichever configured platforms the
+owner names. No reasoning call here (unlike DialogueWriterAgent) -
+title/description come straight from the DialogueScreenplay the owner
+already approved.
 
 Deliberately per-platform fault-tolerant: one platform's failure (missing
 client, expired token, a real upload error) does not stop the others -
 every platform gets its own PublishResult, success or not.
 
-Shared with both ProducedEpisode (old pipeline) and ProducedDialogueEpisode
-(DialogueWriterAgent/DialoguePipeline) - the only difference is whether the
-title/premise live on `.episode` or `.screenplay`. Found live, 2026-10-19,
-by test_publish_youtube_success_reports_the_real_url after the bot was
-rewired to DialoguePipeline: this read produced.episode unconditionally and
-raised AttributeError on every real ProducedDialogueEpisode, so the ✅ branch
-below the try/except was dead code for the new pipeline and publishing a
-real dialogue episode would have silently reported it as a platform
-failure instead of actually publishing.
+Used to also accept the old pipeline's ProducedEpisode (a union type,
+with an isinstance check picking `.episode` vs `.screenplay` for the
+title/premise) - removed 2026-10-21 along with that whole pipeline
+(WriterAgent/DirectorAgent/EpisodePipeline, see models.py's own
+docstring) per the owner's standing instruction that no narrator-style
+code may exist in this repository at all. Only ProducedDialogueEpisode
+is produced by the live bot now, so only it is accepted here.
 """
 from __future__ import annotations
 
 from src.integrations.publishing_client import PublishingClient
-from src.models import ProducedDialogueEpisode, ProducedEpisode, PublishResult
+from src.models import ProducedDialogueEpisode, PublishResult
 
 
 class PublisherError(Exception):
     pass
-
-
-def _title_and_premise(produced: ProducedEpisode | ProducedDialogueEpisode) -> tuple[str, str]:
-    source = produced.episode if isinstance(produced, ProducedEpisode) else produced.screenplay
-    return source.title, source.premise
 
 
 class PublishingAgent:
@@ -38,7 +32,7 @@ class PublishingAgent:
 
     def publish_episode(
         self,
-        produced: ProducedEpisode | ProducedDialogueEpisode,
+        produced: ProducedDialogueEpisode,
         platforms: list[str],
         *,
         description: str | None = None,
@@ -47,10 +41,10 @@ class PublishingAgent:
     ) -> list[PublishResult]:
         if produced.stitched_path is None:
             raise PublisherError(
-                "This episode has no stitched_path - a multi-scene episode needs a remote_exec stitcher configured in EpisodePipeline before it can be published"
+                "This episode has no stitched_path - the final merge must succeed before it can be published"
             )
 
-        title, premise = _title_and_premise(produced)
+        title, premise = produced.screenplay.title, produced.screenplay.premise
         results: list[PublishResult] = []
         for platform in platforms:
             client = self._clients.get(platform)

@@ -1,12 +1,12 @@
 """Turns an approved DialogueScreenplay into real lip-synced clips and one
-stitched episode - the dialogue-native counterpart to EpisodePipeline
-(episode_pipeline.py), backed by FalVideoClient's real
-fal-ai/wan/v2.2-14b/speech-to-video call instead of silent ComfyUI T2V
-plus a narration overlay.
+stitched episode, backed by FalVideoClient's real
+fal-ai/wan/v2.2-14b/speech-to-video call - real characters speaking real
+lines, the only pipeline this codebase has (see models.py's own
+docstring: the old silent-T2V-plus-narration pipeline this one replaced
+is deleted outright, not merely unused).
 
-Unlike EpisodePipeline, clip length here is NOT fixed (CLIP_SECONDS) - it
-is however long that line's own TTS audio runs, because the model lip-
-syncs to the real audio track it is given.
+Clip length is NOT fixed - it is however long that line's own TTS audio
+runs, because the model lip-syncs to the real audio track it is given.
 
 Owner's instruction, 2026-10-19 ("اريدهم مثل المسلسلات التركية" - I want
 them like Turkish TV dramas): DialogueLine.action only ever carried a

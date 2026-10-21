@@ -4,12 +4,12 @@ import pytest
 
 from src.agents.publisher import PublisherError, PublishingAgent
 from src.integrations.publishing_client import MockPublishingClient
-from src.models import Episode, ProducedEpisode
+from src.models import DialogueScreenplay, ProducedDialogueEpisode
 
 
-def _produced(stitched_path: str | None = "out/stitched.mp4") -> ProducedEpisode:
-    episode = Episode(title="Mars Walk", premise="An astronaut explores Mars.", scenes=[])
-    return ProducedEpisode(episode=episode, clips=[], stitched_path=stitched_path, total_generation_seconds=10.0)
+def _produced(stitched_path: str | None = "out/stitched.mp4") -> ProducedDialogueEpisode:
+    screenplay = DialogueScreenplay(title="Mars Walk", premise="An astronaut explores Mars.")
+    return ProducedDialogueEpisode(screenplay=screenplay, clips=[], stitched_path=stitched_path)
 
 
 def test_publish_episode_uploads_to_every_configured_platform():

@@ -7,12 +7,9 @@ import logging
 from dataclasses import dataclass
 
 from .agents.dialogue_writer import DialogueWriterAgent
-from .agents.director import DirectorAgent
 from .agents.publisher import PublishingAgent
-from .agents.writer import WriterAgent
 from .bot.conversation import BotConversation
 from .config import Settings
-from .integrations.comfyui_client import ComfyUIClient, MockComfyUIClient, RealComfyUIClient
 from .integrations.fal_video_client import FalVideoClient, MockFalVideoClient, RealFalVideoClient
 from .integrations.image_client import MockImageClient, RealFalImageClient
 from .integrations.publishing_client import MockPublishingClient, PublishingClient, RealYouTubeClient
@@ -22,10 +19,8 @@ from .integrations.reasoning_client import (
     RealGeminiReasoningClient,
     RealGroqReasoningClient,
 )
-from .integrations.remote_exec_client import MockRemoteExecClient, RealJupyterRemoteExecClient, RemoteExecClient
 from .integrations.tts_client import MockTTSClient, RealAzureTTSClient, TTSClient
 from .workflows.dialogue_pipeline import DialoguePipeline
-from .workflows.episode_pipeline import EpisodePipeline
 
 logger = logging.getLogger("nexus_studio")
 
@@ -33,41 +28,24 @@ logger = logging.getLogger("nexus_studio")
 @dataclass
 class App:
     settings: Settings
-    comfyui: ComfyUIClient
-    remote_exec: RemoteExecClient | None
     reasoning: AgentReasoningClient
-    writer: WriterAgent
-    director: DirectorAgent
-    pipeline: EpisodePipeline
     fal_video: FalVideoClient | None
     dialogue_writer: DialogueWriterAgent | None
     dialogue_pipeline: DialoguePipeline | None
     publisher: PublishingAgent
-    # Owner's instruction, 2026-10-19: the live bot runs the real
-    # DialogueWriterAgent/DialoguePipeline flow, not the old
-    # WriterAgent/DirectorAgent/EpisodePipeline one - conversation is
-    # None exactly when dialogue_writer/dialogue_pipeline are (no real
-    # FAL_KEY/AZURE_SPEECH_KEY), since there is no documentary fallback
-    # to drop back to for the bot anymore.
+    # Owner's standing instruction, 2026-10-21 ("احذف الراوي للابد الا
+    # بطلب مني" - delete the narrator permanently unless I ask for it
+    # myself): the old WriterAgent/DirectorAgent/EpisodePipeline/
+    # ComfyUIClient/RemoteExecClient narration pipeline this App used to
+    # also build (always, unconditionally, on every boot, real or mock)
+    # is deleted outright - see models.py's own docstring. conversation
+    # is None exactly when dialogue_writer/dialogue_pipeline are (no real
+    # FAL_KEY/AZURE_SPEECH_KEY), since there is no fallback pipeline left
+    # to drop back to for the bot at all.
     conversation: BotConversation | None
 
 
 def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
-    if not force_mocks and settings.comfyui_configured:
-        comfyui: ComfyUIClient = RealComfyUIClient(settings.comfyui_base_url)
-    else:
-        if not force_mocks:
-            logger.warning("COMFYUI_BASE_URL not set - using MockComfyUIClient")
-        comfyui = MockComfyUIClient()
-
-    remote_exec: RemoteExecClient | None
-    if not force_mocks and settings.jupyter_configured:
-        remote_exec = RealJupyterRemoteExecClient(settings.jupyter_base_url, settings.jupyter_password)
-    else:
-        if not force_mocks:
-            logger.warning("JUPYTER_BASE_URL/JUPYTER_PASSWORD not set - no remote stitching, single-scene episodes only")
-        remote_exec = None if not force_mocks else MockRemoteExecClient()
-
     # Real finding 2026-10-17 (docs/SOURCES.md "Groq org-wide quota"): a
     # second Groq key under the same account shares nexus-commerce's own
     # daily token quota - not real isolation. Gemini is a genuinely
@@ -89,29 +67,21 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
             logger.warning("Neither GROQ_API_KEY nor GEMINI_API_KEY set - using MockAgentReasoningClient")
         reasoning = MockAgentReasoningClient()
 
-    writer = WriterAgent(reasoning)
-    director = DirectorAgent(reasoning)
-
     tts: TTSClient | None
     if not force_mocks and settings.azure_speech_configured:
         tts = RealAzureTTSClient(settings.azure_speech_key, settings.azure_speech_region)
     else:
         if not force_mocks:
-            logger.warning("AZURE_SPEECH_KEY/REGION not set - episodes will be produced silent")
+            logger.warning("AZURE_SPEECH_KEY/REGION not set - real dialogue/lip-sync pipeline unavailable")
         tts = MockTTSClient() if force_mocks else None
 
-    pipeline = EpisodePipeline(
-        comfyui, settings.output_dir, remote_exec,
-        tts=tts, tts_voice=settings.azure_tts_voice, tts_lang=settings.azure_tts_lang,
-    )
-
     # Real character dialogue with lip sync (DialoguePipeline) - the
-    # owner's real ask, replacing the silent-T2V-plus-narration path
-    # above for any new episode. Needs BOTH a real fal.ai key (the
-    # generation itself) and a real Azure TTS key (the audio each clip
-    # lip-syncs to) - a silent "dialogue" line defeats the entire point,
-    # so this stays None rather than falling back to Mock/no-audio like
-    # the old pipeline does.
+    # owner's only real ask (see models.py's own docstring: no narrator-
+    # style pipeline exists in this codebase at all). Needs BOTH a real
+    # fal.ai key (the generation itself) and a real Azure TTS key (the
+    # audio each clip lip-syncs to) - a silent "dialogue" line defeats
+    # the entire point, so this stays None rather than falling back to
+    # a silent/mock pipeline.
     fal_video: FalVideoClient | None
     dialogue_writer: DialogueWriterAgent | None
     dialogue_pipeline: DialoguePipeline | None
@@ -159,12 +129,7 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
 
     return App(
         settings=settings,
-        comfyui=comfyui,
-        remote_exec=remote_exec,
         reasoning=reasoning,
-        writer=writer,
-        director=director,
-        pipeline=pipeline,
         fal_video=fal_video,
         dialogue_writer=dialogue_writer,
         dialogue_pipeline=dialogue_pipeline,
