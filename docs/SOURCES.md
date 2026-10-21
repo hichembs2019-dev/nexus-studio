@@ -1004,3 +1004,44 @@ Covered by `tests/test_dialogue_pipeline.py` (three distinct, separately mutatio
 Real finding: the owner, reading the earlier full-repository inventory given in this session, pointed at the line-count column for `src/integrations/telegram_client.py` ("ما هو 101؟") - a `TelegramClient` interface + `RealTelegramClient`/`MockTelegramClient` wrapper around python-telegram-bot, built early in this project alongside `telegram_listener.py`-style code from nexus-commerce, but never actually wired into the live bot: `src/bot/runner.py` calls `context.bot.send_message`/`send_video`/`answer_callback_query` directly through python-telegram-bot's own `Application`/`ContextTypes`, never through this wrapper. Confirmed by grep before deleting: no import of `telegram_client`/`TelegramClient` anywhere outside the file itself and its own dedicated test. 101 real lines of genuinely dead code, plus its test file, deleted outright.
 
 Mutation-testing does not apply to a pure deletion of unreferenced code - the proof is that nothing else imports it (confirmed by grep) and the full suite is unaffected (117/117, down from 121 by exactly the four tests `test_telegram_client.py` held, zero new failures anywhere else).
+
+## Full code review requested by the owner - three real bugs found and fixed (2026-10-21)
+
+Real instruction, after a session of real financial loss and repeated incidents ("ليست لي بك ثقة بعد ما خسرت كثيرا، الان راجع كل شيء لكي لا تقول لي الخطأ مني" - I don't trust you any more after losing so much, now review everything so you can't tell me later the mistake was mine): a full read-through of every file the live bot actually reaches, looking specifically for correctness bugs - not just the deletions already done today. Found three, each real, each fixed, each mutation-tested separately.
+
+### 1. Arabic titles/names collapsed the character-photo cache key - the worst kind of bug: silent, free, and invisible
+
+`dialogue_pipeline.py`'s `_slug()` (for the screenplay title) and the inline `char_slug` computation (for a character's name) both matched only `[a-z0-9]` - ASCII. Reproduced directly:
+
+```python
+>>> slug("جسد بلا روح - قصة حقيقية عن رجل مطلق")
+'episode'
+>>> char_slug("فوزية"); char_slug("أحمد"); char_slug("الأب")
+'character'; 'character'; 'character'
+```
+
+Every real title and every real character name in this entire project is Arabic - this project has never once produced a screenplay in any other script. Both slugifiers silently collapsed to the empty string and fell back to their literal default, regardless of what the real title or name actually was. The real photo cache path is `{output_dir}/characters/{slug}_{char_slug}.jpg`, and `_resolve_character_photo` starts with a plain `if os.path.isfile(cache_path): return cache_path, 0.0, None` - a cache HIT, not a failure, so nothing is ever reported anywhere. The consequence: once the very first real Arabic-named character's photo was ever generated in a given `output_dir`, every later character - any name, any gender, any story, forever - would silently reuse that exact same cached file as a "cache hit," at zero cost and with zero error. This is the precise opposite of what today's other fixes (and the 2026-10-20 build before them) were built to guarantee - "صور حسب القصة لا صور ثابتة" - and it was live, undetected, in the very mechanism meant to enforce it.
+
+**Fixed**: `_slug()` rewritten to be Unicode-aware - it keeps any character where Python's `str.isalnum()` is true (which correctly recognizes Arabic letters, unlike the ASCII-only regex class) and collapses runs of everything else to a single underscore. Both the title slug and the character-name slug now go through this one shared function.
+
+Covered by `tests/test_dialogue_pipeline.py::test_produce_gives_different_arabic_named_characters_their_own_cached_photo` - a real Arabic title with two different Arabic-named characters, asserting the image client is actually called twice (not once, with the second silently served from a false cache hit) and that two distinct files land in the cache directory. Mutation-tested: reverted `_slug` to the old ASCII-only regex, confirmed the test fails for exactly the reproduced reason (`len(image_client.calls) == 1`, not 2 - the second character's real generation call never happened), restored, confirmed the full suite green.
+
+### 2. The real-spend cost ceiling was also silently skipping free ($0) caption lines
+
+`produce()`'s hard cost-ceiling check (`MAX_EPISODE_COST_USD`) used to run before the spoken/caption branch of the per-line loop, so a genuinely free on-screen-text line (`/caption`, no TTS, no fal.ai call) got dropped into `skipped_lines` - reported to the owner as "stopped due to the cost ceiling" - whenever an earlier SPOKEN line had already exhausted the ceiling, even though skipping a $0 line protects no real money at all. This directly contradicts the ceiling's own documented purpose ("a hard ceiling on total REAL SPEND").
+
+**Fixed**: the ceiling check now runs AFTER the spoken/caption branch, so only lines that actually cost something are ever gated by it; a caption line is only ever withheld by its own real failure (no photo available for any captioned character), never by unrelated spoken-line spending.
+
+Covered by `tests/test_dialogue_pipeline.py::test_produce_still_renders_a_free_caption_line_after_the_cost_ceiling_is_reached`. Mutation-tested: moved the ceiling check back to its old position, confirmed the test fails (the caption line lands in `skipped_lines` instead of `clips`), restored, confirmed the full suite green.
+
+### 3. The pre-approval cost estimate never included real portrait generation cost
+
+`conversation.py`'s `_format_screenplay()` builds the one cost number the owner actually checks before pressing Approve - and it only ever summed spoken-line video cost (`ESTIMATED_SECONDS_PER_LINE * PRICE_PER_SECOND_USD`). It never added the real per-character portrait generation cost (`fal-ai/flux/dev`, `$0.025/megapixel`, billed once per character appearing in any line) that `DialoguePipeline.produce()` actually spends. The one number built specifically so the owner can decide before committing real money silently understated the real total every single time.
+
+**Fixed**: the estimate now also adds `(number of distinct characters appearing in any line) * PRICE_PER_MEGAPIXEL_USD`.
+
+Covered by `tests/test_bot_conversation.py::test_new_cost_estimate_includes_real_portrait_generation_cost` (new) and the existing `/caption` estimate test, corrected to the same real total. Mutation-tested: removed the portrait-cost addition, confirmed both tests fail with the real understated number (`$0.80` shown instead of the real `$0.85`), restored, confirmed the full suite green.
+
+### What this review covered and did not
+
+Read start to finish: `conversation.py`, `runner.py`, `dialogue_writer.py`, `dialogue_pipeline.py`, `models.py`, `app.py`, `config.py`, every integration client (`fal_video_client.py`, `image_client.py`, `tts_client.py`, `reasoning_client.py`, `publishing_client.py`), `character_photos.py`, `_text_parsing.py`, `main.py`. A repo-wide grep for the same ASCII-only pattern class (`[a-z0-9]`, `[a-zA-Z]`) confirmed no other instance of it exists anywhere in `src/`. This is a code-level review for correctness bugs, not a live production test - the owner's own standing rule in this project's `CLAUDE.md` still applies: nothing here is "proven" until a real run on the real bot produces a real, inspected result.

@@ -57,6 +57,7 @@ from dataclasses import dataclass, field
 from src.agents.dialogue_writer import DialogueWriterAgent, DialogueWriterError, count_quoted_moments
 from src.agents.publisher import PublishingAgent
 from src.integrations.fal_video_client import PRICE_PER_SECOND_USD
+from src.integrations.image_client import PRICE_PER_MEGAPIXEL_USD
 from src.models import DialogueScreenplay, ProducedDialogueEpisode
 
 DEFAULT_TARGET_SECONDS = 60.0
@@ -430,7 +431,18 @@ class BotConversation:
             lines.append(f"{l.index + 1}. {l.character}: {l.line}{marker}")
         lines.append("")
         spoken_count = sum(1 for l in screenplay.lines if l.spoken)
-        est_cost = spoken_count * ESTIMATED_SECONDS_PER_LINE * PRICE_PER_SECOND_USD["480p"]
+        # Real bug found by code review, 2026-10-21: this estimate only
+        # ever counted spoken-line video cost - never the real portrait
+        # generation cost (fal-ai/flux/dev, $0.025/megapixel) DialoguePipeline
+        # also spends, once per character who appears in any line at all
+        # (spoken or captioned). The number shown before Approve - the one
+        # moment that matters most for a cost this owner has been burned
+        # by before - silently understated the real total every time.
+        appearing_character_count = len({l.character for l in screenplay.lines})
+        est_cost = (
+            spoken_count * ESTIMATED_SECONDS_PER_LINE * PRICE_PER_SECOND_USD["480p"]
+            + appearing_character_count * PRICE_PER_MEGAPIXEL_USD
+        )
         lines.append(f"(تكلفة تقديرية تقريبية: ${est_cost:.2f} - التكلفة الحقيقية تُحسب بعد التوليد الفعلي)")
         lines.append("لتعديل سطر أو عدة أسطر دفعة واحدة، كل تعديل في سطر منفصل:\n/edit\n<الرقم> <الحوار الجديد>\n<رقم آخر> <حوار آخر>")
         lines.append("لجعل سطر (أو عدة أسطر) نصًا مكتوبًا على الشاشة بدل صوت حقيقي (بتكلفة $0): /caption <الرقم> [أرقام أخرى]")

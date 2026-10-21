@@ -21,7 +21,6 @@ from __future__ import annotations
 import base64
 import mimetypes
 import os
-import re
 import subprocess
 
 from src.integrations.fal_video_client import PRICE_PER_SECOND_USD, FalVideoClient
@@ -67,8 +66,44 @@ class DialoguePipelineError(Exception):
     pass
 
 
-def _slug(title: str) -> str:
-    return re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_") or "episode"
+def _slug(text: str, default: str = "episode") -> str:
+    # Real bug found by code review, 2026-10-21: this used to match only
+    # `[a-z0-9]` - ASCII. Every real title and character name in this
+    # entire project is Arabic, and Arabic letters never match that
+    # class, so _slug("جسد بلا روح") and the equivalent inline regex for
+    # a character's name both silently collapsed to the empty string and
+    # fell back to the literal default ("episode"/"character") - THE
+    # SAME fallback for every real screenplay and every real Arabic
+    # character name, regardless of how different they actually are.
+    # Reproduced directly: slug("جسد بلا روح ...") == "episode",
+    # char_slug("فوزية") == char_slug("أحمد") == "character".
+    #
+    # The real consequence is severe, not cosmetic: _resolve_character_photo's
+    # cache path is `{output_dir}/characters/{slug}_{char_slug}.jpg` and
+    # starts with `if os.path.isfile(cache_path): return cache_path, 0.0, None`
+    # - a cache HIT, not a failure, so nothing is reported. Once the
+    # first real Arabic character photo is ever generated in a given
+    # output_dir, EVERY later character - any name, any gender, any
+    # story, forever - silently reuses that exact same file as a "cache
+    # hit", with zero cost and zero error. This is the opposite of what
+    # the owner has been demanding all session ("صور حسب القصة لا صور
+    # ثابتة") - a real, story-specific photo became a single photo
+    # shared by everyone, invisibly. The same collision also hit the
+    # caption group image cache and every per-line output filename.
+    #
+    # str.isalnum() is Unicode-aware - True for Arabic letters, unlike
+    # the ASCII-only regex class - so this now actually distinguishes
+    # different Arabic titles and names instead of discarding them.
+    out: list[str] = []
+    prev_was_sep = True  # avoid a leading underscore
+    for ch in text.lower():
+        if ch.isalnum():
+            out.append(ch)
+            prev_was_sep = False
+        elif not prev_was_sep:
+            out.append("_")
+            prev_was_sep = True
+    return "".join(out).strip("_") or default
 
 
 def _data_uri(path: str) -> str:
@@ -185,22 +220,21 @@ class DialoguePipeline:
             caption_group_image = self._build_caption_group_image(resolved_caption_photos, slug)
 
         for line in screenplay.lines:
-            if self._max_cost_usd is not None and spent_so_far >= self._max_cost_usd:
-                # The ceiling was already reached by an earlier real,
-                # already-paid line - this and every remaining line is
-                # never attempted, so zero further real money is spent.
-                skipped_lines.append(line)
-                continue
-
             character = characters_by_name.get(line.character)
             if character is None:
                 raise DialoguePipelineError(f"Line {line.index} speaker {line.character!r} is not in the cast")
 
             if not line.spoken:
-                # Zero real money spent on this line at all - no TTS, no
-                # fal.ai call. A local ffmpeg failure here still lands in
-                # failed_lines like any other line, but never carries the
-                # "real money was spent" prefix below, because none was.
+                # Real bug found by code review, 2026-10-21: the cost
+                # ceiling check used to run BEFORE this branch, so a
+                # caption line - genuinely $0, no TTS, no fal.ai call -
+                # got silently skipped into skipped_lines whenever
+                # earlier SPOKEN lines had already exhausted the real
+                # ceiling, even though skipping it saves no real money
+                # at all. The ceiling's own stated purpose ("a hard
+                # ceiling on total REAL SPEND") never covered free
+                # content - moved below so only spoken lines, which
+                # actually cost something, are ever gated by it.
                 if caption_group_image is None:
                     failed_lines.append(
                         (line, "لا توجد صورة حقيقية لأي من الشخصيات التي نصها مكتوب على الشاشة - لا توجد صورة احتياطية بأمر المالك")
@@ -214,6 +248,15 @@ class DialoguePipeline:
                     clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=0.0))
                 except Exception as exc:
                     failed_lines.append((line, str(exc)))
+                continue
+
+            if self._max_cost_usd is not None and spent_so_far >= self._max_cost_usd:
+                # The ceiling was already reached by an earlier real,
+                # already-paid line - this and every remaining SPOKEN
+                # line is never attempted, so zero further real money is
+                # spent. Caption lines above are never subject to this -
+                # they cost nothing to begin with.
+                skipped_lines.append(line)
                 continue
 
             # Owner's standing instruction, 2026-10-21 ("احذف الستة صور و
@@ -323,7 +366,7 @@ class DialoguePipeline:
         failure, a missing `appearance`, or no configured image client
         each return None - the caller (produce()) then fails that
         character's lines instead of ever using a stand-in photo."""
-        char_slug = re.sub(r"[^a-z0-9]+", "_", character.name.lower()).strip("_") or "character"
+        char_slug = _slug(character.name, default="character")
         cache_dir = os.path.join(self._output_dir, "characters")
         cache_path = os.path.join(cache_dir, f"{slug}_{char_slug}.jpg")
         if os.path.isfile(cache_path):

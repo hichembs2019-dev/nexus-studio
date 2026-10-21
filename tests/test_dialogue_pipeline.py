@@ -56,6 +56,50 @@ def _real_jpeg_bytes(path: str) -> bytes:
 # character a photo any more.
 
 
+def test_produce_gives_different_arabic_named_characters_their_own_cached_photo(tmp_path):
+    # Real bug found by code review, 2026-10-21: _slug() (for the
+    # screenplay title) and the inline char_slug regex (for a
+    # character's name) both matched only [a-z0-9] - ASCII. Every real
+    # title and character name in this project is Arabic, which has no
+    # characters in that class, so both collapsed to the empty string
+    # and fell back to the literal default ("episode"/"character")
+    # regardless of what the real title/name actually was. The photo
+    # cache path is {output_dir}/characters/{slug}_{char_slug}.jpg,
+    # which starts with a plain "if the file already exists, reuse it"
+    # check - a real cache HIT, not a failure, so nothing is ever
+    # reported. The second (and every later) Arabic-named character
+    # across every story in the same output_dir would silently reuse
+    # the FIRST one's cached photo, at zero cost and with no error at
+    # all - exactly the "one shared face" defect the owner has been
+    # fighting to eliminate all session, reintroduced by this bug in
+    # the very mechanism meant to prevent it.
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    image_client = MockImageClient()
+    pipeline = DialoguePipeline(fal_video, MockTTSClient(), str(tmp_path), image_client=image_client)
+    screenplay = DialogueScreenplay(
+        title="جسد بلا روح",
+        premise="p",
+        characters=[
+            Character(name="فوزية", appearance="curly dark hair, slender build"),
+            Character(name="أحمد", appearance="short grey hair, broad shoulders"),
+        ],
+        lines=[
+            DialogueLine(index=0, character="فوزية", line="واحد", action="a1"),
+            DialogueLine(index=1, character="أحمد", line="اثنان", action="a2"),
+        ],
+    )
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(image_client.calls) == 2  # each character's own real generation was actually attempted
+    assert image_client.calls[0] != image_client.calls[1]  # different appearance -> different real prompt
+    cached_files = sorted(os.listdir(tmp_path / "characters"))
+    assert len(cached_files) == 2, f"expected two distinct cached character photos, got {cached_files}"
+    assert len(produced.clips) == 2
+    assert produced.portrait_failures == []
+
+
 def test_produce_fails_every_line_when_no_image_client_is_configured(tmp_path):
     # No fallback face exists at all: without a real image client, NO
     # character can ever get a photo, so every one of their lines fails
@@ -286,6 +330,41 @@ def test_produce_stops_spending_once_the_hard_cost_ceiling_is_reached(tmp_path):
     assert len(produced.clips) == 1
     assert [l.index for l in produced.skipped_lines] == [1, 2]
     assert produced.total_cost_usd == pytest.approx(0.10 + PRICE_PER_MEGAPIXEL_USD)
+
+
+@pytest.mark.skipif(not _ARABIC_FONT_AVAILABLE, reason="fonts-noto-core not installed on this machine - Dockerfile installs it for the real deployment")
+def test_produce_still_renders_a_free_caption_line_after_the_cost_ceiling_is_reached(tmp_path):
+    # Real bug found by code review, 2026-10-21: the cost ceiling check
+    # used to run BEFORE the spoken/caption branch, so a genuinely free
+    # ($0, no TTS, no fal.ai call) caption line got skipped into
+    # skipped_lines whenever an earlier SPOKEN line had already
+    # exhausted the ceiling - even though skipping it saves no real
+    # money at all, which contradicts the ceiling's own documented
+    # purpose (a ceiling on real SPEND). Reproduced directly: a ceiling
+    # that lets exactly one $0.10 spoken line through must still let a
+    # LATER $0 caption line render, not be silently dropped with it.
+    portrait_bytes = _real_jpeg_bytes(str(tmp_path / "portrait.jpg"))
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    pipeline = DialoguePipeline(
+        fal_video, MockTTSClient(), str(tmp_path),
+        image_client=MockImageClient(scripted_bytes=portrait_bytes), max_cost_usd=0.05,
+    )
+    screenplay = DialogueScreenplay(
+        title="Dinner", premise="p",
+        characters=[Character(name="A", appearance="a")],
+        lines=[
+            DialogueLine(index=0, character="A", line="one", action="a1"),  # spoken, $0.10 - exceeds the $0.05 ceiling
+            DialogueLine(index=1, character="A", line="نص مجاني", action="", spoken=False),  # $0 - must NOT be skipped
+        ],
+    )
+
+    produced = pipeline.produce(screenplay)
+
+    assert produced.skipped_lines == []  # the free caption must never be treated as unaffordable
+    caption_clip = next((c for c in produced.clips if c.line.index == 1), None)
+    assert caption_clip is not None
+    assert caption_clip.cost_usd == 0.0
 
 
 def test_produce_generates_and_uses_a_real_portrait_for_a_character_with_appearance(tmp_path):
