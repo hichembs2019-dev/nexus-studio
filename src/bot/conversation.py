@@ -145,6 +145,105 @@ class BotConversation:
         state.pending_text = (state.pending_text + "\n" + text).strip() if state.pending_text else text
         return None
 
+    def handle_message(self, chat_id: str, text: str) -> BotReply:
+        # Owner's standing instruction, 2026-10-21 ("اريد الحديث معه كما
+        # اتحدث معك ... محادثة حرة كاملة مع نقاش وتعديل جماعي للقصة" - I
+        # want to talk to it like I talk to you, a full free conversation
+        # with discussion and collaborative editing of the story): every
+        # plain (non-command) message is routed through
+        # DialogueWriterAgent.route_message() into one of a fixed set of
+        # real actions - never arbitrary code. The one real-money moment
+        # (production) is NEVER one of those actions, under any phrasing
+        # - it still only ever starts from the explicit ✅ button shown
+        # under a screenplay (handle_approve), completely unchanged by
+        # anything below. /new, /full, /edit, /caption keep working
+        # exactly as before for anyone who prefers exact commands.
+        text = text.strip()
+        state = self._states.setdefault(chat_id, _ChatState())
+        # Real risk found by code review, 2026-10-21: Telegram's own
+        # CLIENT still auto-splits one long typed/pasted message into
+        # several separate text updates (see the 2026-10-19 finding
+        # above) - runner.py debounces these into one real call here,
+        # arriving with an EMPTY text once the owner has gone quiet, so
+        # this pulls the full coalesced text out of pending_text itself
+        # rather than routing a mid-sentence fragment through the LLM.
+        # A caller passing a real, non-empty message (e.g. a direct unit
+        # test) is unaffected - this path only ever triggers when there
+        # is nothing new to add on top of what is already accumulated.
+        if not text:
+            text = state.pending_text
+            state.pending_text = ""
+        if not text:
+            return BotReply(text="")
+
+        try:
+            routed = self._dialogue_writer.route_message(state.screenplay, state.pending_text, text)
+        except DialogueWriterError as exc:
+            return BotReply(text=f"تعذّر فهم رسالتك: {exc}")
+
+        if routed.intent == "accumulate":
+            self.handle_plain_text(chat_id, text)
+            return BotReply(text=routed.reply)
+
+        if routed.intent == "discuss":
+            return BotReply(text=routed.reply)
+
+        if routed.intent == "build_screenplay":
+            premise = f"{state.pending_text}\n{text}".strip() if state.pending_text else text
+            if not premise:
+                return BotReply(text=routed.reply)
+            try:
+                quote_count = count_quoted_moments(premise)
+            except DialogueWriterError as exc:
+                return BotReply(text=str(exc))
+            title = premise[:50]
+            try:
+                # Real quoted moments exist: build verbatim (the same
+                # guarantee /full gives) - the owner's own words are
+                # never at risk of being selected/invented over, which
+                # is exactly what a free conversational trigger must not
+                # silently do. Only a genuinely quote-free idea falls
+                # back to the estimated/selective mode /new uses, since
+                # there is nothing verbatim to preserve either way.
+                if quote_count > 0:
+                    screenplay = self._dialogue_writer.write_complete_dialogue_screenplay(title, premise)
+                else:
+                    line_count = max(2, round(DEFAULT_TARGET_SECONDS / ESTIMATED_SECONDS_PER_LINE))
+                    screenplay = self._dialogue_writer.write_dialogue_screenplay(title, premise, line_count)
+            except DialogueWriterError as exc:
+                return BotReply(text=str(exc))
+            state.screenplay = screenplay
+            state.pending_text = ""
+            return BotReply(
+                text=f"{routed.reply}\n\n{self._format_screenplay(screenplay)}",
+                buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")],
+            )
+
+        if routed.intent == "edit_lines":
+            # route_message() already refuses this intent when no draft
+            # exists (a real code-level gate, not just a prompt rule) -
+            # this mirrors handle_edit's own guard only as defense in depth.
+            if state.screenplay is None:
+                return BotReply(text="لا توجد مسودة سيناريو بعد - صف لي القصة أولًا.")
+            not_found = self._apply_edits(state.screenplay, routed.edits)
+            reply_text = f"{routed.reply}\n\n{self._format_screenplay(state.screenplay)}"
+            if not_found:
+                reply_text += f"\n\n⚠️ لم توجد هذه الأرقام في المسودة الحالية (تحتوي على {len(state.screenplay.lines)} سطراً): {', '.join(str(n) for n in not_found)}"
+            return BotReply(text=reply_text, buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
+
+        if routed.intent == "set_captions":
+            if state.screenplay is None:
+                return BotReply(text="لا توجد مسودة سيناريو بعد - صف لي القصة أولًا.")
+            not_found = self._apply_captions(state.screenplay, routed.caption_lines)
+            reply_text = f"{routed.reply}\n\n{self._format_screenplay(state.screenplay)}"
+            if not_found:
+                reply_text += f"\n\n⚠️ لم توجد هذه الأرقام في المسودة الحالية (تحتوي على {len(state.screenplay.lines)} سطراً): {', '.join(str(n) for n in not_found)}"
+            return BotReply(text=reply_text, buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
+
+        # Unreachable: route_message() validates intent is one of the
+        # five handled above and raises DialogueWriterError otherwise.
+        return BotReply(text=routed.reply)
+
     def handle_new(self, chat_id: str, args_text: str) -> BotReply:
         args_text = args_text.strip()
         state = self._states.setdefault(chat_id, _ChatState())
@@ -254,18 +353,40 @@ class BotConversation:
                 )
             )
 
-        not_found: list[int] = []
-        for line_number, new_text in edits:
-            matching = [l for l in state.screenplay.lines if l.index == line_number - 1]
-            if not matching:
-                not_found.append(line_number)
-                continue
-            matching[0].line = new_text
-
+        not_found = self._apply_edits(state.screenplay, edits)
         reply_text = self._format_screenplay(state.screenplay)
         if not_found:
             reply_text += f"\n\n⚠️ لم توجد هذه الأرقام في المسودة الحالية (تحتوي على {len(state.screenplay.lines)} سطراً): {', '.join(str(n) for n in not_found)}"
         return BotReply(text=reply_text, buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
+
+    @staticmethod
+    def _apply_edits(screenplay: DialogueScreenplay, edits: list[tuple[int, str]]) -> list[int]:
+        """Applies each (1-based line number, new text) edit, returns the
+        numbers that did not match any real line. Shared by /edit and the
+        conversational router (handle_message) - one real implementation,
+        not two that could silently drift apart."""
+        not_found: list[int] = []
+        for line_number, new_text in edits:
+            matching = [l for l in screenplay.lines if l.index == line_number - 1]
+            if not matching:
+                not_found.append(line_number)
+                continue
+            matching[0].line = new_text
+        return not_found
+
+    @staticmethod
+    def _apply_captions(screenplay: DialogueScreenplay, numbers: list[int]) -> list[int]:
+        """Marks each 1-based line number spoken=False, returns the numbers
+        that did not match any real line. Shared by /caption and the
+        conversational router (handle_message)."""
+        not_found: list[int] = []
+        for number in numbers:
+            matching = [l for l in screenplay.lines if l.index == number - 1]
+            if not matching:
+                not_found.append(number)
+                continue
+            matching[0].spoken = False
+        return not_found
 
     def handle_caption(self, chat_id: str, args_text: str) -> BotReply:
         # Owner's instruction, 2026-10-20 ("نحذف الام و يبقى حوارها مكتوب
@@ -295,14 +416,7 @@ class BotConversation:
                 )
             )
 
-        not_found: list[int] = []
-        for number in numbers:
-            matching = [l for l in state.screenplay.lines if l.index == number - 1]
-            if not matching:
-                not_found.append(number)
-                continue
-            matching[0].spoken = False
-
+        not_found = self._apply_captions(state.screenplay, numbers)
         reply_text = self._format_screenplay(state.screenplay)
         if not_found:
             reply_text += f"\n\n⚠️ لم توجد هذه الأرقام في المسودة الحالية (تحتوي على {len(state.screenplay.lines)} سطراً): {', '.join(str(n) for n in not_found)}"

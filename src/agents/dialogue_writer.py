@@ -116,8 +116,9 @@ from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass, field
 
-from src.agents._text_parsing import parse_json_object_array
+from src.agents._text_parsing import parse_json_object, parse_json_object_array
 from src.integrations.reasoning_client import AgentReasoningClient
 from src.models import Character, DialogueLine, DialogueScreenplay
 from src.workflows.character_photos import resolve_placeholder_voice
@@ -169,6 +170,47 @@ Rules:
   - "line": the quoted text for that moment, copied EXACTLY as written in the premise - not a single word paraphrased, shortened, or altered.
   - "action": a short, visual-only English stage direction for this moment (facial expression, gesture, what they're doing) - NEVER repeat or translate the spoken line itself here.
 - NEVER create or use a "narrator" character - every quoted moment belongs to the real person who said it in the premise."""
+
+# Owner's standing instruction, 2026-10-21 ("اريد الحديث معه كما اتحدث
+# معك ... محادثة حرة كاملة مع نقاش وتعديل جماعي للقصة" - I want to talk
+# to it like I talk to you, a full free conversation with discussion and
+# collaborative editing of the story): the bot used to only understand
+# rigid commands (/new, /full, /edit <number> <text>, /caption <numbers>)
+# - any other plain message was either silently accumulated as raw story
+# text or, after a draft existed, simply had nowhere to go. This routes
+# ANY free message into one of a small, fixed set of real actions, never
+# arbitrary code - the owner can describe what they want in their own
+# words and the bot figures out whether that is more story material, a
+# request to build the screenplay now, an edit to a specific existing
+# line, or a request to caption a line, and replies conversationally
+# either way.
+#
+# Real safety line that must never move: "edit_lines" can still only
+# ever change `DialogueLine.line` text through the exact same mechanism
+# `/edit` already used (one owner-approved screenplay, read/edited
+# before any real money is spent) - and real production (spending real
+# money) is NEVER triggered from this router, under any intent, however
+# the owner phrases it. It only ever starts from the explicit ✅ button
+# already shown under the screenplay - see BotConversation.handle_message.
+_ROUTER_SYSTEM_PROMPT = """You are routing one new Telegram message inside an ongoing real conversation about building a real short film - real characters speaking real dialogue, never a narrator.
+
+You are given, in the user message: whether a screenplay draft currently exists (and its full current content if so), any story text the owner has already typed that has not yet been turned into a screenplay, and the owner's brand-new message.
+
+Output ONLY a JSON object, nothing else - no markdown fences, no commentary:
+{
+  "intent": "accumulate" | "build_screenplay" | "edit_lines" | "set_captions" | "discuss",
+  "reply": "<a short (1-3 sentences), natural reply in the SAME language as the owner's message, to show them right now - this is a real conversation, not a form>",
+  "edits": [{"line": <1-based line number>, "text": "<new exact line text>"}],
+  "caption_lines": [<1-based line numbers>]
+}
+
+Rules for choosing "intent":
+- "accumulate": the message is part of the story/idea itself (prose, a scene, dialogue, description) with no instruction attached to act on it right now - acknowledge briefly, take no action. "edits" and "caption_lines" are empty arrays.
+- "build_screenplay": the owner is explicitly asking to build or start the screenplay now (e.g. "ابن السيناريو", "جاهز", "كمل", "اصنعه الآن", "build it", "ابدأ").
+- "edit_lines": the owner is asking to change specific EXISTING line(s) of a draft that already exists - never valid if no draft exists (choose "discuss" instead and say so). If the owner gives their OWN exact words for the new line (quoted, or clearly dictated verbatim), you MUST use that EXACT text in "text" - never paraphrase, shorten, improve, or correct it, even slightly. Only if they describe a change WITHOUT giving exact words may you write new dialogue that fulfills the request, matching that character's established voice in the draft.
+- "set_captions": the owner wants specific existing line(s) shown as on-screen text instead of being spoken aloud - never valid if no draft exists.
+- "discuss": anything else - a question, an opinion, small talk, or anything that sounds like approving, producing, publishing, or spending real money. Real production ONLY ever starts from the ✅ button already shown under the screenplay, never from a message here - if the owner's words sound like approval or "do it now", intent is still "discuss" and "reply" must tell them, plainly, to press that ✅ button themselves. Never imply here that anything was approved, produced, or paid for.
+- Never invent an "edits"/"caption_lines" entry for a line number that does not exist in the current draft shown to you - if the owner refers to a line that is not there, intent is "discuss" and "reply" says so."""
 
 # Matches an Arabic guillemet quote («...») or a straight/curly double-quote
 # ("..."), non-greedy so two separate quotes on one line count as two
@@ -227,9 +269,84 @@ class DialogueWriterError(Exception):
     pass
 
 
+@dataclass
+class RoutedMessage:
+    """One free Telegram message, classified into exactly one of a fixed
+    set of real actions - see _ROUTER_SYSTEM_PROMPT's own comment for why
+    this exists and the safety line it never crosses (real production is
+    never one of these intents)."""
+
+    intent: str  # "accumulate" | "build_screenplay" | "edit_lines" | "set_captions" | "discuss"
+    reply: str
+    edits: list[tuple[int, str]] = field(default_factory=list)
+    caption_lines: list[int] = field(default_factory=list)
+
+
 class DialogueWriterAgent:
     def __init__(self, reasoning_client: AgentReasoningClient):
         self._reasoning_client = reasoning_client
+
+    def route_message(self, screenplay: DialogueScreenplay | None, pending_text: str, new_message: str) -> RoutedMessage:
+        parts: list[str] = []
+        if screenplay is not None:
+            draft_lines = "\n".join(
+                f"{l.index + 1}. {l.character}: {l.line}" + ("" if l.spoken else " (نص على الشاشة، غير منطوق)")
+                for l in screenplay.lines
+            )
+            parts.append(f"[مسودة سيناريو موجودة حاليًا]\nالعنوان: {screenplay.title}\n{draft_lines}")
+        else:
+            parts.append("[لا توجد مسودة سيناريو بعد]")
+        if pending_text:
+            parts.append(f"[نص قصة مُجمَّع لم يُبنَ منه سيناريو بعد]\n{pending_text}")
+        parts.append(f"[رسالة المالك الجديدة]\n{new_message}")
+        user_prompt = "\n\n".join(parts)
+
+        raw = self._reasoning_client.complete(_ROUTER_SYSTEM_PROMPT, user_prompt)
+        data = parse_json_object(raw, ("intent", "reply"), error_cls=DialogueWriterError)
+
+        intent = data.get("intent")
+        if intent not in ("accumulate", "build_screenplay", "edit_lines", "set_captions", "discuss"):
+            raise DialogueWriterError(f"Router reply had an unrecognized intent {intent!r}: {raw!r}")
+        # Real safety check, not just a prompt instruction the model could
+        # ignore: edit_lines/set_captions are structurally meaningless
+        # without an existing draft - reject here rather than trust the
+        # model never to return them anyway (the same code-level-gate
+        # principle as the narrator check above).
+        if intent in ("edit_lines", "set_captions") and screenplay is None:
+            raise DialogueWriterError(
+                f"Router returned intent {intent!r} but no screenplay draft exists yet: {raw!r}"
+            )
+
+        reply = data.get("reply")
+        if not isinstance(reply, str) or not reply.strip():
+            raise DialogueWriterError(f"Router reply had no usable 'reply' text: {raw!r}")
+
+        edits: list[tuple[int, str]] = []
+        if intent == "edit_lines":
+            raw_edits = data.get("edits")
+            if not isinstance(raw_edits, list) or not raw_edits:
+                raise DialogueWriterError(f"Router intent was edit_lines but gave no real edits: {raw!r}")
+            for item in raw_edits:
+                if not isinstance(item, dict) or "line" not in item or not isinstance(item.get("text"), str) or not item["text"].strip():
+                    raise DialogueWriterError(f"Router edit item missing a real line/text: {item!r}")
+                try:
+                    line_number = int(item["line"])
+                except (TypeError, ValueError):
+                    raise DialogueWriterError(f"Router edit item had a non-numeric line: {item!r}")
+                edits.append((line_number, item["text"]))
+
+        caption_lines: list[int] = []
+        if intent == "set_captions":
+            raw_lines = data.get("caption_lines")
+            if not isinstance(raw_lines, list) or not raw_lines:
+                raise DialogueWriterError(f"Router intent was set_captions but gave no real line numbers: {raw!r}")
+            for n in raw_lines:
+                try:
+                    caption_lines.append(int(n))
+                except (TypeError, ValueError):
+                    raise DialogueWriterError(f"Router caption_lines item was not a real number: {n!r}")
+
+        return RoutedMessage(intent=intent, reply=reply, edits=edits, caption_lines=caption_lines)
 
     def write_dialogue_screenplay(self, title: str, premise: str, line_count: int) -> DialogueScreenplay:
         if line_count < 1:

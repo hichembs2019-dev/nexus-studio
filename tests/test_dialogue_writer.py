@@ -6,6 +6,7 @@ import pytest
 
 from src.agents.dialogue_writer import DialogueWriterAgent, DialogueWriterError
 from src.integrations.reasoning_client import MockAgentReasoningClient
+from src.models import Character, DialogueLine, DialogueScreenplay
 
 
 def _cast_reply(*people):
@@ -386,3 +387,125 @@ def test_parse_cast_rejects_two_characters_with_the_same_name():
         writer.write_dialogue_screenplay("T", "p", line_count=1)
 
     assert len(reasoning.calls) == 1  # the lines step must never be reached
+
+
+# Owner's standing instruction, 2026-10-21 ("اريد الحديث معه كما اتحدث
+# معك ... محادثة حرة كاملة") - route_message() tests.
+
+
+def _screenplay_with_two_lines() -> DialogueScreenplay:
+    return DialogueScreenplay(
+        title="T", premise="p",
+        characters=[Character(name="فوزية", appearance="a"), Character(name="جويدة", appearance="b")],
+        lines=[
+            DialogueLine(index=0, character="فوزية", line="مرحبا", action="smiling"),
+            DialogueLine(index=1, character="جويدة", line="أهلا", action="waving"),
+        ],
+    )
+
+
+def test_route_message_accumulate_returns_the_reply_with_no_edits_or_captions():
+    router_reply = json.dumps({"intent": "accumulate", "reply": "تم، أكمل القصة.", "edits": [], "caption_lines": []})
+    reasoning = MockAgentReasoningClient(scripted_replies=[router_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    routed = writer.route_message(None, "", "كان يا ما كان رجل يعيش وحيدًا")
+
+    assert routed.intent == "accumulate"
+    assert routed.reply == "تم، أكمل القصة."
+    assert routed.edits == []
+    assert routed.caption_lines == []
+
+
+def test_route_message_edit_lines_uses_the_owners_exact_quoted_words():
+    screenplay = _screenplay_with_two_lines()
+    router_reply = json.dumps(
+        {
+            "intent": "edit_lines",
+            "reply": "عدّلت السطر الأول كما طلبت بالضبط.",
+            "edits": [{"line": 1, "text": "لن أسامحك أبدًا"}],
+            "caption_lines": [],
+        }
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[router_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    routed = writer.route_message(screenplay, "", 'اجعل السطر الأول يقول حرفيًا: «لن أسامحك أبدًا»')
+
+    assert routed.intent == "edit_lines"
+    assert routed.edits == [(1, "لن أسامحك أبدًا")]
+
+
+def test_route_message_set_captions_returns_the_real_line_numbers():
+    screenplay = _screenplay_with_two_lines()
+    router_reply = json.dumps(
+        {"intent": "set_captions", "reply": "حوّلت السطر الثاني لنص على الشاشة.", "edits": [], "caption_lines": [2]}
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[router_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    routed = writer.route_message(screenplay, "", "اجعل سطر جويدة نصًا مكتوبًا لا صوتًا")
+
+    assert routed.intent == "set_captions"
+    assert routed.caption_lines == [2]
+
+
+def test_route_message_build_screenplay_intent():
+    router_reply = json.dumps({"intent": "build_screenplay", "reply": "جارٍ بناء السيناريو الآن.", "edits": [], "caption_lines": []})
+    reasoning = MockAgentReasoningClient(scripted_replies=[router_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    routed = writer.route_message(None, "قصة طويلة مجمّعة سابقًا", "ابن السيناريو الآن")
+
+    assert routed.intent == "build_screenplay"
+
+
+def test_route_message_discuss_never_implies_real_production_started():
+    # Owner's standing instruction, 2026-10-21: real production must NEVER
+    # be triggered by a free message, however it is phrased - only the
+    # explicit ✅ button. A message that sounds like approval still comes
+    # back as "discuss", and the test covers that the router's own contract
+    # allows exactly this - the structural guarantee (never calling
+    # DialoguePipeline.produce from here) lives in BotConversation itself.
+    router_reply = json.dumps(
+        {"intent": "discuss", "reply": "اضغط زر ✅ موافقة الظاهر تحت السيناريو لبدء الإنتاج الحقيقي.", "edits": [], "caption_lines": []}
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[router_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    routed = writer.route_message(_screenplay_with_two_lines(), "", "وافقت، انتج الفيديو الآن")
+
+    assert routed.intent == "discuss"
+    assert "✅" in routed.reply
+
+
+def test_route_message_rejects_an_unrecognized_intent():
+    router_reply = json.dumps({"intent": "produce_now", "reply": "x", "edits": [], "caption_lines": []})
+    reasoning = MockAgentReasoningClient(scripted_replies=[router_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="unrecognized intent"):
+        writer.route_message(None, "", "test")
+
+
+def test_route_message_rejects_edit_lines_when_no_draft_exists():
+    # Real code-level gate, not just a prompt instruction the model could
+    # ignore: edit_lines/set_captions are structurally meaningless without
+    # an existing draft to edit.
+    router_reply = json.dumps(
+        {"intent": "edit_lines", "reply": "x", "edits": [{"line": 1, "text": "y"}], "caption_lines": []}
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[router_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="no screenplay draft exists"):
+        writer.route_message(None, "", "غيّر السطر الأول")
+
+
+def test_route_message_rejects_edit_lines_with_no_real_edits():
+    router_reply = json.dumps({"intent": "edit_lines", "reply": "x", "edits": [], "caption_lines": []})
+    reasoning = MockAgentReasoningClient(scripted_replies=[router_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="gave no real edits"):
+        writer.route_message(_screenplay_with_two_lines(), "", "غيّر شيئًا")

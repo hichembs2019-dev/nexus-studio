@@ -559,3 +559,148 @@ def test_split_for_telegram_default_limit_stays_under_the_real_bot_api_cap():
     # comfortably under it (margin for Telegram's own real newline
     # counting, per real developer reports), never at or above it.
     assert TELEGRAM_MESSAGE_LIMIT < 4096
+
+
+# Owner's standing instruction, 2026-10-21 ("اريد الحديث معه كما اتحدث
+# معك ... محادثة حرة كاملة مع نقاش وتعديل جماعي للقصة") - handle_message() tests.
+
+
+def _router_reply(intent, reply="رد", edits=None, caption_lines=None):
+    return json.dumps({"intent": intent, "reply": reply, "edits": edits or [], "caption_lines": caption_lines or []})
+
+
+def test_handle_message_accumulate_stores_the_text_and_replies_conversationally():
+    router = _router_reply("accumulate", reply="تم، أكمل.")
+    conversation, _ = _conversation([router])
+
+    reply = conversation.handle_message("chat1", "كان يا ما كان رجل وحيد")
+
+    assert reply.text == "تم، أكمل."
+    assert reply.buttons is None
+
+
+def test_handle_message_discuss_never_triggers_real_production():
+    # Real safety line that must never move: production (DialoguePipeline.
+    # produce(), the one real-money call) can ONLY start from
+    # handle_approve(), triggered by the explicit ✅ button press - never
+    # from a free message, however it is phrased. This asserts the whole
+    # exchange ends with conversation.handle_approve's own precondition
+    # still unmet unless a real screenplay was separately built and
+    # approved - "وافقت انتج الآن" alone must never produce one.
+    router = _router_reply("discuss", reply="اضغط زر ✅ موافقة لبدء الإنتاج الحقيقي.")
+    conversation, _ = _conversation([router])
+
+    reply = conversation.handle_message("chat1", "وافقت، انتج الفيديو الآن")
+
+    assert "✅" in reply.text
+    assert reply.buttons is None
+    # No screenplay was ever built, so approval is still structurally impossible.
+    approve_reply, screenplay = conversation.handle_approve("chat1")
+    assert screenplay is None
+    assert "/new" in approve_reply.text
+
+
+def test_handle_message_build_screenplay_uses_verbatim_mode_when_real_quotes_exist():
+    router = _router_reply("build_screenplay", reply="جارٍ بناء السيناريو من كلامك الحقيقي.")
+    cast = _cast_reply(("فوزية", "female"))
+    lines = _lines_reply(("فوزية", "مرحبا", "smiling"))
+    conversation, _ = _conversation([router, cast, lines])
+
+    reply = conversation.handle_message("chat1", 'فوزية قالت: «مرحبا»')
+
+    assert "جارٍ بناء السيناريو" in reply.text
+    assert "مرحبا" in reply.text
+    assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
+
+
+def test_handle_message_build_screenplay_falls_back_to_estimated_mode_with_no_quotes():
+    router = _router_reply("build_screenplay", reply="جارٍ بناء سيناريو من فكرتك.")
+    cast = _cast_reply(("فوزية", "female"))
+    line_count = max(2, round(60.0 / ESTIMATED_SECONDS_PER_LINE))
+    lines = _lines_reply(*[("فوزية", f"سطر {i}", "") for i in range(line_count)])
+    conversation, _ = _conversation([router, cast, lines])
+
+    reply = conversation.handle_message("chat1", "فكرة بلا أي كلام منقول حرفيًا عن امرأة وحيدة")
+
+    assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
+
+
+def test_handle_message_build_screenplay_uses_previously_accumulated_text_too():
+    router_accumulate = _router_reply("accumulate", reply="تم.")
+    router_build = _router_reply("build_screenplay", reply="جارٍ البناء.")
+    cast = _cast_reply(("فوزية", "female"))
+    lines = _lines_reply(("فوزية", "مرحبا", "smiling"))
+    conversation, _ = _conversation([router_accumulate, router_build, cast, lines])
+
+    conversation.handle_message("chat1", 'فوزية قالت: «مرحبا»')
+    reply = conversation.handle_message("chat1", "جاهز، ابن السيناريو الآن")
+
+    assert "مرحبا" in reply.text
+
+
+def test_handle_message_edit_lines_applies_the_owners_exact_quoted_words():
+    cast = _cast_reply(("فوزية", "female"))
+    lines = _lines_reply(("فوزية", "مرحبا", "smiling"))
+    router_build = _router_reply("build_screenplay", reply="بُني.")
+    router_edit = _router_reply("edit_lines", reply="عدّلت السطر الأول.", edits=[{"line": 1, "text": "لن أسامحك"}])
+    conversation, _ = _conversation([router_build, cast, lines, router_edit])
+
+    conversation.handle_message("chat1", 'فوزية قالت: «مرحبا»')
+    reply = conversation.handle_message("chat1", 'اجعل السطر الأول يقول حرفيًا: «لن أسامحك»')
+
+    assert "لن أسامحك" in reply.text
+    assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
+
+
+def test_handle_message_set_captions_marks_the_real_line_as_free():
+    cast = _cast_reply(("فوزية", "female"), ("جويدة", "female"))
+    lines = _lines_reply(("فوزية", "واحد", ""), ("جويدة", "اثنان", ""))
+    router_build = _router_reply("build_screenplay", reply="بُني.")
+    router_caption = _router_reply("set_captions", reply="حوّلت سطر جويدة لنص على الشاشة.", caption_lines=[2])
+    conversation, _ = _conversation([router_build, cast, lines, router_caption])
+
+    conversation.handle_message("chat1", 'فوزية: «واحد» جويدة: «اثنان»')
+    reply = conversation.handle_message("chat1", "اجعل سطر جويدة نصًا مكتوبًا لا صوتًا")
+
+    assert "نص على الشاشة" in reply.text
+
+
+def test_handle_message_edit_lines_without_a_draft_is_structurally_refused():
+    # route_message() itself already raises for this (a real code-level
+    # gate), but this proves handle_message surfaces that as a clear
+    # reply rather than an uncaught exception reaching the owner.
+    router = _router_reply("edit_lines", reply="x", edits=[{"line": 1, "text": "y"}])
+    conversation, _ = _conversation([router])
+
+    reply = conversation.handle_message("chat1", "غيّر السطر الأول")
+
+    assert "تعذّر فهم رسالتك" in reply.text
+
+
+def test_handle_message_with_empty_text_routes_the_accumulated_pending_text_instead():
+    # Real risk found by code review, 2026-10-21: Telegram's own client
+    # auto-splits one long typed/pasted message into several separate
+    # text updates - runner.py debounces these and calls handle_message
+    # with an empty string once the owner has gone quiet, so the FULL
+    # coalesced story (not a mid-sentence fragment) must be what actually
+    # gets routed through the LLM.
+    router = _router_reply("accumulate", reply="تم.")
+    reasoning = MockAgentReasoningClient(scripted_replies=[router])
+    conversation = BotConversation(DialogueWriterAgent(reasoning), PublishingAgent({}))
+    conversation.handle_plain_text("chat1", "جزء أول من القصة")
+    conversation.handle_plain_text("chat1", "جزء ثانٍ من نفس القصة")
+
+    reply = conversation.handle_message("chat1", "")
+
+    assert reply.text == "تم."
+    call_user_prompt = reasoning.calls[0][1]
+    assert "جزء أول من القصة" in call_user_prompt
+    assert "جزء ثانٍ من نفس القصة" in call_user_prompt
+
+
+def test_handle_message_with_empty_text_and_nothing_pending_does_nothing():
+    conversation, _ = _conversation([])
+
+    reply = conversation.handle_message("chat1", "")
+
+    assert reply.text == ""

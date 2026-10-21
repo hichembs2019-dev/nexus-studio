@@ -72,6 +72,36 @@ supports a single global error_handler for exactly this
 (add_error_handler) instead of wrapping every individual handler -
 registered below, it reports any uncaught exception from ANY handler
 to the chat it happened in.
+
+Owner's standing instruction, 2026-10-21 ("اريد الحديث معه كما اتحدث
+معك" - I want to talk to it like I talk to you): plain text no longer
+only silently accumulates (BotConversation.handle_plain_text) - it also
+now drives a real LLM router (BotConversation.handle_message ->
+DialogueWriterAgent.route_message) that lets the owner discuss and
+collaboratively edit the screenplay in free Arabic text, not just the
+fixed /new, /full, /edit <n> <text>, /caption <n> commands (which still
+work unchanged, for anyone who prefers them).
+
+Telegram's own CLIENT still auto-splits one long typed/pasted message
+into several separate text updates (the 2026-10-19 finding above) -
+routing each fragment through the LLM individually would ask it to
+interpret a sentence cut off mid-word. _TEXT_DEBOUNCE_SECONDS below
+coalesces rapid-fire fragments per chat: each new fragment cancels any
+still-pending timer for that chat and restarts it, so the router only
+actually runs once the owner has gone quiet for that long. The pending
+asyncio.Task is kept in _debounce_tasks until it fires or is cancelled -
+the same strong-reference pattern _background_tasks/_spawn above exists
+for, and for the identical documented reason (the event loop holds only
+a weak reference to a bare Task).
+
+The one real-money call (dialogue_pipeline.produce(), inside
+_produce_and_notify) is untouched by any of this and stays reachable
+from exactly one place: the "✅ موافقة" button's own branch in _button
+below. BotConversation.handle_message() has no reference to
+DialoguePipeline at all - confirmed by grep before writing this, the
+same way the dead telegram_client.py file above was confirmed unused
+before deleting it - so production cannot be reached from a chat
+message however it is phrased, free conversation included.
 """
 from __future__ import annotations
 
@@ -99,6 +129,35 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         task = asyncio.create_task(coro)
         _background_tasks.add(task)
         task.add_done_callback(_background_tasks.discard)
+
+    # Owner's standing instruction, 2026-10-21 ("اريد الحديث معه كما
+    # اتحدث معك ... محادثة حرة كاملة"): every plain text message now
+    # routes through a real LLM intent call (BotConversation.handle_message),
+    # not silent accumulation. But Telegram's own CLIENT still auto-splits
+    # one long typed/pasted message into several separate text updates
+    # (the 2026-10-19 finding below) - routing each FRAGMENT through the
+    # LLM individually would ask it to interpret a sentence cut off
+    # mid-word, and risks misreading a half-sent thought as an
+    # instruction. A short per-chat debounce coalesces rapid-fire
+    # fragments into one real message before the router ever runs: each
+    # new fragment cancels any still-pending timer for that chat and
+    # starts a fresh one, so routing only fires once no further fragment
+    # has arrived for _TEXT_DEBOUNCE_SECONDS. The task reference is kept
+    # in this same dict until it fires or is cancelled - the same
+    # strong-reference pattern _spawn uses above, for the same documented
+    # asyncio GC risk.
+    _TEXT_DEBOUNCE_SECONDS = 1.5
+    _debounce_tasks: dict[str, asyncio.Task] = {}
+
+    async def _route_after_debounce(chat_id: str, context: ContextTypes.DEFAULT_TYPE) -> None:
+        try:
+            await asyncio.sleep(_TEXT_DEBOUNCE_SECONDS)
+        except asyncio.CancelledError:
+            return
+        _debounce_tasks.pop(chat_id, None)
+        reply = conversation.handle_message(chat_id, "")
+        if reply.text:
+            await _send_reply(chat_id, context, reply)
 
     async def _send_reply(chat_id: str, context: ContextTypes.DEFAULT_TYPE, reply) -> None:
         # Real gap found, 2026-10-20 ("لماذا النهاية متقطعة... لماذا لا
@@ -194,9 +253,22 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         # long real story needs every later piece collected here instead
         # of being silently dropped. conversation.handle_plain_text()
         # always returns None - no reply - so a multi-message story does
-        # not get a chat reply per fragment, only once /new is sent.
+        # not get a chat reply per fragment, only once routing fires.
+        #
+        # Owner's instruction, 2026-10-21 ("اريد الحديث معه كما اتحدث
+        # معك" - free conversation, discussion and collaborative editing):
+        # every fragment still accumulates here immediately (so nothing is
+        # ever lost even if the process restarts mid-story), but now also
+        # (re)starts the debounce timer above. Only once no further
+        # fragment arrives for _TEXT_DEBOUNCE_SECONDS does _route_after_debounce
+        # actually call the LLM router - see that function's own comment
+        # for why a debounce is needed at all.
         chat_id = str(update.effective_chat.id)
         conversation.handle_plain_text(chat_id, update.message.text or "")
+        existing = _debounce_tasks.get(chat_id)
+        if existing is not None:
+            existing.cancel()
+        _debounce_tasks[chat_id] = asyncio.create_task(_route_after_debounce(chat_id, context))
 
     async def _edit(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         # Owner's instruction, 2026-10-20: /edit now accepts several
