@@ -55,9 +55,9 @@ jobs:
             # rebuild, nothing touched - so the real in-progress call is
             # never disturbed. Restored to the real deploy script right
             # after this one read.
-            docker compose logs --tail=80 nexus-studio
-            echo "=== ps inside the container (is anything actually running?) ==="
-            docker compose exec -T nexus-studio ps aux || true
+            docker compose logs --tail=400 nexus-studio
+            echo "=== container inspect: State (running? restart count? exit code?) ==="
+            docker inspect nexus-studio-nexus-studio-1 --format '{{json .State}}' || true
             # Owner's own real question, 2026-10-21 ("و اين groq؟ اليس
             # واحد منهم احتياطي؟" - where is Groq, isn't one of them the
             # backup?): .env lives only on this real droplet, never in
