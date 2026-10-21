@@ -68,7 +68,13 @@ main.py                               # نقطة تشغيل البوت كخدم�
 ## التكلفة الحقيقية
 
 - فيديو: `$0.10/ثانية` (480p)، `$0.15/ثانية` (580p)، `$0.20/ثانية` (720p) -
-  `fal_video_client.py`'s `PRICE_PER_SECOND_USD`.
+  `fal_video_client.py`'s `PRICE_PER_SECOND_USD` (أسعار fal.ai الموثّقة رسمياً).
+  **لكن فاتورة حقيقية (2026-10-21) أثبتت أن fal.ai يحتسب كل طلب فعلياً
+  بسعر 720p ($0.20/ثانية) رغم أن الكود يطلب دائماً 480p** - راجع
+  `docs/SOURCES.md` ("fal.ai billed every real speech-to-video call at the
+  720p rate..."). لذلك كل تتبّع مال حقيقي (التقدير قبل الموافقة وسقف
+  `MAX_EPISODE_COST_USD`) يستعمل `REAL_BILLED_PRICE_PER_SECOND_USD`
+  (= سعر 720p الموثّق) وليس سعر 480p، إلى أن يُحسم الخلاف مع fal.ai.
 - صورة شخصية مرجعية: `$0.025/ميجابكسل` - `image_client.py`'s
   `PRICE_PER_MEGAPIXEL_USD`. مولّدة مرة واحدة لكل (سيناريو، شخصية) ومُخزَّنة -
   لا تُعاد عند إعادة محاولة نفس السيناريو.

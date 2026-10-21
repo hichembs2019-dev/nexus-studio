@@ -56,7 +56,7 @@ from dataclasses import dataclass, field
 
 from src.agents.dialogue_writer import DialogueWriterAgent, DialogueWriterError, count_quoted_moments
 from src.agents.publisher import PublishingAgent
-from src.integrations.fal_video_client import PRICE_PER_SECOND_USD
+from src.integrations.fal_video_client import REAL_BILLED_PRICE_PER_SECOND_USD
 from src.integrations.image_client import PRICE_PER_MEGAPIXEL_USD
 from src.models import DialogueScreenplay, ProducedDialogueEpisode
 
@@ -622,8 +622,15 @@ class BotConversation:
         # moment that matters most for a cost this owner has been burned
         # by before - silently understated the real total every time.
         appearing_character_count = len({l.character for l in screenplay.lines})
+        # Real invoice evidence, 2026-10-21 (see
+        # fal_video_client.py's REAL_BILLED_PRICE_PER_SECOND_USD and
+        # docs/SOURCES.md): the owner's own fal.ai bill showed every real
+        # call ever made by this project billed at the 720p rate, despite
+        # every request asking for the cheaper 480p rate - the estimate
+        # shown here before every Approve must reflect what he is really
+        # charged, not what the API's own pricing table promises.
         est_cost = (
-            spoken_count * ESTIMATED_SECONDS_PER_LINE * PRICE_PER_SECOND_USD["480p"]
+            spoken_count * ESTIMATED_SECONDS_PER_LINE * REAL_BILLED_PRICE_PER_SECOND_USD
             + appearing_character_count * PRICE_PER_MEGAPIXEL_USD
         )
         lines.append(f"(تكلفة تقديرية تقريبية: ${est_cost:.2f} - التكلفة الحقيقية تُحسب بعد التوليد الفعلي)")

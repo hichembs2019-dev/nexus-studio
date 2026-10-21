@@ -23,7 +23,7 @@ import mimetypes
 import os
 import subprocess
 
-from src.integrations.fal_video_client import PRICE_PER_SECOND_USD, FalVideoClient
+from src.integrations.fal_video_client import REAL_BILLED_PRICE_PER_SECOND_USD, FalVideoClient
 from src.integrations.image_client import PRICE_PER_MEGAPIXEL_USD, ImageClient
 from src.integrations.tts_client import TTSClient
 from src.models import Character, DialogueScreenplay, ProducedDialogueClip, ProducedDialogueEpisode
@@ -333,13 +333,20 @@ class DialoguePipeline:
                 # itself fails.
                 try:
                     duration = _ffprobe_duration(clip_path)
-                    cost = duration * PRICE_PER_SECOND_USD[self._resolution]
+                    # Real invoice evidence, 2026-10-21 (see
+                    # fal_video_client.py's REAL_BILLED_PRICE_PER_SECOND_USD
+                    # and docs/SOURCES.md): fal.ai has billed every real
+                    # call this project ever made at the 720p rate despite
+                    # every request asking for 480p, so real cost tracking
+                    # uses the rate fal.ai actually charges, not the rate
+                    # requested.
+                    cost = duration * REAL_BILLED_PRICE_PER_SECOND_USD
                     clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
                     spent_so_far += cost
                 except Exception as probe_exc:
                     try:
                         duration = _ffprobe_duration(audio_path)
-                        cost = duration * PRICE_PER_SECOND_USD[self._resolution]
+                        cost = duration * REAL_BILLED_PRICE_PER_SECOND_USD
                         clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
                         spent_so_far += cost
                     except Exception:

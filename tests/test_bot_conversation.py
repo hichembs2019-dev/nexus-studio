@@ -5,7 +5,7 @@ import json
 from src.agents.dialogue_writer import DialogueWriterAgent
 from src.agents.publisher import PublishingAgent
 from src.bot.conversation import ESTIMATED_SECONDS_PER_LINE, BotConversation, TELEGRAM_MESSAGE_LIMIT, split_for_telegram
-from src.integrations.fal_video_client import PRICE_PER_SECOND_USD
+from src.integrations.fal_video_client import REAL_BILLED_PRICE_PER_SECOND_USD
 from src.integrations.image_client import PRICE_PER_MEGAPIXEL_USD
 from src.integrations.publishing_client import MockPublishingClient
 from src.integrations.reasoning_client import MockAgentReasoningClient
@@ -57,7 +57,7 @@ def test_new_cost_estimate_includes_real_portrait_generation_cost():
 
     from src.integrations.image_client import PRICE_PER_MEGAPIXEL_USD
 
-    expected_cost = 2 * ESTIMATED_SECONDS_PER_LINE * PRICE_PER_SECOND_USD["480p"] + 2 * PRICE_PER_MEGAPIXEL_USD
+    expected_cost = 2 * ESTIMATED_SECONDS_PER_LINE * REAL_BILLED_PRICE_PER_SECOND_USD + 2 * PRICE_PER_MEGAPIXEL_USD
     assert f"${expected_cost:.2f}" in reply.text
 
 
@@ -292,7 +292,7 @@ def test_caption_marks_a_line_as_on_screen_text_with_zero_estimated_cost():
     # still need a real generated portrait - that real cost must still
     # be in the estimate too (real bug found by code review, 2026-10-21:
     # it never was, before this).
-    expected_cost = 1 * ESTIMATED_SECONDS_PER_LINE * PRICE_PER_SECOND_USD["480p"] + 2 * PRICE_PER_MEGAPIXEL_USD
+    expected_cost = 1 * ESTIMATED_SECONDS_PER_LINE * REAL_BILLED_PRICE_PER_SECOND_USD + 2 * PRICE_PER_MEGAPIXEL_USD
     assert f"${expected_cost:.2f}" in reply.text
     assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
 

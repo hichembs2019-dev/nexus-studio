@@ -52,6 +52,26 @@ PRICE_PER_SECOND_USD = {
     "720p": 0.20,
 }
 
+# Real invoice evidence, 2026-10-21 (see docs/SOURCES.md "fal.ai billed the
+# 720p rate on every real call, despite every request asking for 480p"):
+# the owner's own fal.ai Usage & Billing page showed this exact endpoint
+# billed at precisely $0.20/video-second - the 720p row in the table
+# above, never the 480p row - on every real line this project has ever
+# produced, even though generate_speech_to_video() has sent
+# resolution="480p" since its very first commit (confirmed via git log:
+# 0b80a95). Real numbers: 117.91s billed at $0.20/s = $23.58125, matching
+# the real "Total Cost" fal.ai showed almost to the cent.
+#
+# Until fal.ai confirms or fixes why, this project's own real-spend
+# tracking (the pre-Approve estimate and the hard MAX_EPISODE_COST_USD
+# ceiling) must use the rate fal.ai is REALLY charging, not the rate its
+# docs promise - a ceiling computed at the hopeful $0.10/s rate is not a
+# real $10 ceiling if reality is $0.20/s, it is a real $20 ceiling with a
+# $10 label on it. This does not change what resolution is requested
+# (still "480p" - still the cheaper, valid, documented choice; sending
+# something else is not known to change what fal.ai actually does here).
+REAL_BILLED_PRICE_PER_SECOND_USD = PRICE_PER_SECOND_USD["720p"]
+
 
 class FalVideoError(Exception):
     pass

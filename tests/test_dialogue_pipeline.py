@@ -7,7 +7,7 @@ import pytest
 
 import base64
 
-from src.integrations.fal_video_client import MockFalVideoClient
+from src.integrations.fal_video_client import REAL_BILLED_PRICE_PER_SECOND_USD, MockFalVideoClient
 from src.integrations.image_client import ImageGenerationError, MockImageClient, PRICE_PER_MEGAPIXEL_USD
 from src.integrations.tts_client import MockTTSClient
 from src.models import Character, DialogueLine, DialogueScreenplay
@@ -211,7 +211,10 @@ def test_produce_single_line_calls_tts_then_fal_with_data_uris_and_saves_the_cli
     assert len(produced.clips) == 1
     assert os.path.exists(produced.clips[0].local_path)
     assert produced.stitched_path == produced.clips[0].local_path
-    assert produced.clips[0].cost_usd == pytest.approx(1.0 * 0.10)  # 1s clip @ 480p
+    # Real invoice evidence, 2026-10-21: fal.ai bills this model at the
+    # 720p rate regardless of the "480p" actually requested - see
+    # REAL_BILLED_PRICE_PER_SECOND_USD and docs/SOURCES.md.
+    assert produced.clips[0].cost_usd == pytest.approx(1.0 * REAL_BILLED_PRICE_PER_SECOND_USD)
 
 
 def test_produce_falls_back_to_a_default_prompt_when_action_is_empty(tmp_path):
@@ -255,7 +258,7 @@ def test_produce_multi_line_stitches_clips_in_order(tmp_path):
     assert os.path.exists(produced.stitched_path)
     # Two distinct speaking characters -> two real clips AND two real
     # per-story portraits, each billed separately.
-    assert produced.total_cost_usd == pytest.approx(2 * 1.0 * 0.10 + 2 * PRICE_PER_MEGAPIXEL_USD)
+    assert produced.total_cost_usd == pytest.approx(2 * 1.0 * REAL_BILLED_PRICE_PER_SECOND_USD + 2 * PRICE_PER_MEGAPIXEL_USD)
 
 
 def test_produce_keeps_real_paid_clips_when_the_final_merge_fails(tmp_path, monkeypatch):
@@ -302,7 +305,7 @@ def test_produce_keeps_real_paid_clips_when_the_final_merge_fails(tmp_path, monk
     assert produced.stitched_path is None
     assert produced.stitch_error is not None
     assert "simulated real ffmpeg concat failure" in produced.stitch_error
-    assert produced.total_cost_usd == pytest.approx(2 * 1.0 * 0.10 + 2 * PRICE_PER_MEGAPIXEL_USD)
+    assert produced.total_cost_usd == pytest.approx(2 * 1.0 * REAL_BILLED_PRICE_PER_SECOND_USD + 2 * PRICE_PER_MEGAPIXEL_USD)
 
 
 def test_produce_stops_spending_once_the_hard_cost_ceiling_is_reached(tmp_path):
@@ -317,12 +320,13 @@ def test_produce_stops_spending_once_the_hard_cost_ceiling_is_reached(tmp_path):
 
     fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
     tts = MockTTSClient()
-    # Each clip costs 1.0s * $0.10/s (480p) = $0.10. The ceiling is only
-    # ever checked BEFORE a line is attempted (its real cost isn't known
-    # until after fal.ai actually runs it), so a ceiling below one line's
-    # cost is what proves the check fires at all: the first line still
-    # goes through (nothing spent yet to compare, beyond the one real
-    # portrait), every line after it must not.
+    # Each clip costs 1.0s * REAL_BILLED_PRICE_PER_SECOND_USD (the real,
+    # evidenced rate fal.ai actually bills - see docs/SOURCES.md) = $0.20.
+    # The ceiling is only ever checked BEFORE a line is attempted (its
+    # real cost isn't known until after fal.ai actually runs it), so a
+    # ceiling below one line's cost is what proves the check fires at
+    # all: the first line still goes through (nothing spent yet to
+    # compare, beyond the one real portrait), every line after it must not.
     pipeline = DialoguePipeline(
         fal_video, tts, str(tmp_path), image_client=MockImageClient(), max_cost_usd=0.05
     )
@@ -342,7 +346,7 @@ def test_produce_stops_spending_once_the_hard_cost_ceiling_is_reached(tmp_path):
     assert len(fal_video.calls) == 1
     assert len(produced.clips) == 1
     assert [l.index for l in produced.skipped_lines] == [1, 2]
-    assert produced.total_cost_usd == pytest.approx(0.10 + PRICE_PER_MEGAPIXEL_USD)
+    assert produced.total_cost_usd == pytest.approx(REAL_BILLED_PRICE_PER_SECOND_USD + PRICE_PER_MEGAPIXEL_USD)
 
 
 @pytest.mark.skipif(not _ARABIC_FONT_AVAILABLE, reason="fonts-noto-core not installed on this machine - Dockerfile installs it for the real deployment")
@@ -354,7 +358,7 @@ def test_produce_still_renders_a_free_caption_line_after_the_cost_ceiling_is_rea
     # exhausted the ceiling - even though skipping it saves no real
     # money at all, which contradicts the ceiling's own documented
     # purpose (a ceiling on real SPEND). Reproduced directly: a ceiling
-    # that lets exactly one $0.10 spoken line through must still let a
+    # that lets exactly one $0.20 spoken line through must still let a
     # LATER $0 caption line render, not be silently dropped with it.
     portrait_bytes = _real_jpeg_bytes(str(tmp_path / "portrait.jpg"))
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
@@ -367,7 +371,7 @@ def test_produce_still_renders_a_free_caption_line_after_the_cost_ceiling_is_rea
         title="Dinner", premise="p",
         characters=[Character(name="A", appearance="a")],
         lines=[
-            DialogueLine(index=0, character="A", line="one", action="a1"),  # spoken, $0.10 - exceeds the $0.05 ceiling
+            DialogueLine(index=0, character="A", line="one", action="a1"),  # spoken, $0.20 - exceeds the $0.05 ceiling
             DialogueLine(index=1, character="A", line="نص مجاني", action="", spoken=False),  # $0 - must NOT be skipped
         ],
     )
@@ -405,7 +409,7 @@ def test_produce_generates_and_uses_a_real_portrait_for_a_character_with_appeara
     sent_image_b64 = fal_video.calls[0]["image_data_uri"].split(",", 1)[1]
     assert base64.b64decode(sent_image_b64) == b"real-generated-portrait-bytes"
     assert produced.portrait_cost_usd == pytest.approx(PRICE_PER_MEGAPIXEL_USD)
-    assert produced.total_cost_usd == pytest.approx(0.10 + PRICE_PER_MEGAPIXEL_USD)
+    assert produced.total_cost_usd == pytest.approx(REAL_BILLED_PRICE_PER_SECOND_USD + PRICE_PER_MEGAPIXEL_USD)
 
 
 def test_produce_reuses_the_cached_portrait_without_regenerating_on_a_second_call(tmp_path):
@@ -502,7 +506,7 @@ def test_produce_renders_a_spoken_false_line_as_a_zero_cost_caption(tmp_path):
     assert float(probe.stdout.strip()) >= 2.0  # CAPTION_MIN_SECONDS floor for a short line
     # The one spoken line's real cost, plus both characters' real portraits
     # (B needs one too, to appear in the caption's shared group photo).
-    assert produced.total_cost_usd == pytest.approx(0.10 + 2 * PRICE_PER_MEGAPIXEL_USD)
+    assert produced.total_cost_usd == pytest.approx(REAL_BILLED_PRICE_PER_SECOND_USD + 2 * PRICE_PER_MEGAPIXEL_USD)
 
 
 @pytest.mark.skipif(not _ARABIC_FONT_AVAILABLE, reason="fonts-noto-core not installed on this machine - Dockerfile installs it for the real deployment")
@@ -678,7 +682,7 @@ def test_produce_keeps_already_paid_for_clips_when_a_later_line_fails(tmp_path):
     # the real money already spent on the surviving clips (plus the one
     # real portrait, generated once and reused for all three lines) must
     # still be reported, not thrown away along with the failed one
-    assert produced.total_cost_usd == pytest.approx(2 * 1.0 * 0.10 + PRICE_PER_MEGAPIXEL_USD)
+    assert produced.total_cost_usd == pytest.approx(2 * 1.0 * REAL_BILLED_PRICE_PER_SECOND_USD + PRICE_PER_MEGAPIXEL_USD)
 
 
 def test_produce_reports_when_a_line_was_billed_by_fal_ai_before_the_failure(tmp_path, monkeypatch):
