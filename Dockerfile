@@ -2,9 +2,10 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# ffmpeg is used for real, local voiceover merging (episode_pipeline.py
-# _attach_narration/_stitch_local) - without it every episode is produced
-# silent again even with AZURE_SPEECH_KEY set.
+# ffmpeg is used for real, local work the dialogue pipeline does itself:
+# stitching every real clip into one film (dialogue_pipeline.py's
+# _stitch), building the shared caption group photo (_build_caption_group_image),
+# and rendering on-screen caption clips (_render_caption_clip).
 #
 # fonts-noto-core: a real, confirmed-installable Debian/Ubuntu package.
 # Added 2026-10-20 for on-screen caption lines (dialogue_pipeline.py's
