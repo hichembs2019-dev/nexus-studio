@@ -173,7 +173,7 @@ def test_write_dialogue_screenplay_raises_on_invalid_cast_json():
     reasoning = MockAgentReasoningClient(scripted_replies=["not json"])
     writer = DialogueWriterAgent(reasoning)
 
-    with pytest.raises(DialogueWriterError, match="not valid JSON"):
+    with pytest.raises(DialogueWriterError, match="أرسل القصة كاملة"):
         writer.write_dialogue_screenplay("T", "p", line_count=1)
 
 
@@ -387,6 +387,29 @@ def test_parse_cast_rejects_two_characters_with_the_same_name():
         writer.write_dialogue_screenplay("T", "p", line_count=1)
 
     assert len(reasoning.calls) == 1  # the lines step must never be reached
+
+
+def test_parse_cast_gives_a_clear_arabic_message_when_the_model_replies_with_no_real_json():
+    # Real incident, caught live, 2026-10-21: a premise with no real
+    # story content (an instruction sentence alone, after the owner's
+    # earlier accumulated story was lost to a container restart) made
+    # the casting model reply in plain English asking a clarifying
+    # question instead of a JSON array. The raw repr of that reply used
+    # to reach the owner verbatim and in English - this proves it now
+    # gets a clear, actionable Arabic explanation instead.
+    reasoning = MockAgentReasoningClient(scripted_replies=["What is the story premise or the characters?"])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="أرسل القصة كاملة"):
+        writer.write_dialogue_screenplay("T", "اصنع القصة بالظبط كما طلبت", line_count=1)
+
+
+def test_parse_cast_gives_a_clear_arabic_message_for_an_empty_cast_array():
+    reasoning = MockAgentReasoningClient(scripted_replies=["[]"])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="لم يجد أي شخصية حقيقية"):
+        writer.write_dialogue_screenplay("T", "اصنع القصة بالظبط كما طلبت", line_count=1)
 
 
 # Owner's standing instruction, 2026-10-21 ("اريد الحديث معه كما اتحدث

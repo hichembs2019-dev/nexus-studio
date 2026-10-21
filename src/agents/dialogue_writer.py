@@ -411,9 +411,24 @@ class DialogueWriterAgent:
         try:
             parsed = json.loads(text)
         except json.JSONDecodeError as exc:
-            raise DialogueWriterError(f"Cast reply was not valid JSON: {raw_reply!r}") from exc
+            # Real incident, caught live, 2026-10-21: when the premise has
+            # no real story content (e.g. an instruction sentence with
+            # nothing to cast, sent after the owner's pending story text
+            # was lost to a container restart), the casting model does not
+            # error - it replies in plain English asking what the story or
+            # characters are. The raw repr of that reply used to reach the
+            # owner verbatim ("Cast reply was not valid JSON: 'What is the
+            # story premise...'") - confusing, in the wrong language, and
+            # gave no indication of what to actually do.
+            raise DialogueWriterError(
+                "تعذّر توليد قائمة الشخصيات - النص المُرسل لا يحتوي على قصة أو حوار حقيقي كافٍ ليُستخرج منه شخصيات "
+                f"حقيقية. أرسل القصة كاملة كرسالة عادية أولاً، ثم اطلب بناء السيناريو. (رد النموذج: {raw_reply!r})"
+            ) from exc
         if not isinstance(parsed, list) or not parsed:
-            raise DialogueWriterError(f"Cast reply was not a non-empty JSON array: {raw_reply!r}")
+            raise DialogueWriterError(
+                "تعذّر توليد قائمة الشخصيات - النموذج لم يجد أي شخصية حقيقية تتكلم في النص المُرسل. "
+                f"أرسل القصة كاملة أولاً، أو تأكد أنها تحتوي على شخصيات تتحدث فعلاً. (رد النموذج: {raw_reply!r})"
+            )
         for item in parsed:
             # Real bug found by code review, 2026-10-19: this only
             # checked the keys existed, never that their values were
