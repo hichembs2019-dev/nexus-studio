@@ -12,6 +12,7 @@ from .bot.conversation import BotConversation
 from .config import Settings
 from .integrations.fal_video_client import REAL_BILLED_PRICE_PER_SECOND_USD, FalVideoClient, MockFalVideoClient, RealFalVideoClient
 from .integrations.image_client import MockImageClient, RealFalImageClient
+from .integrations.replicate_image_client import RealReplicateImageClient
 from .integrations.replicate_video_client import PROVISIONAL_PRICE_PER_SECOND_USD, RealReplicateVideoClient
 from .integrations.publishing_client import MockPublishingClient, PublishingClient, RealYouTubeClient
 from .integrations.reasoning_client import (
@@ -111,25 +112,32 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
     # mock/unconfigured build where no real pipeline exists at all.
     price_per_second_usd: float = REAL_BILLED_PRICE_PER_SECOND_USD
     if not force_mocks and chosen_video_provider is not None and settings.azure_speech_configured:
+        # Owner's standing instruction, 2026-10-21 ("لا تضع السراق ...
+        # احذفهم من الكود" - don't put the thieves [fal.ai] in, remove
+        # them from the code): once Replicate is chosen, fal.ai must
+        # never be called at all for this run - not for video (fixed
+        # above) and not for the character portrait either. Portrait
+        # generation now follows the SAME chosen_video_provider, not a
+        # separate fal_key check - the only way to guarantee fal.ai is
+        # never constructed, let alone called, while on Replicate.
         if chosen_video_provider == "replicate":
             fal_video = RealReplicateVideoClient(settings.replicate_api_token)
+            image_client = RealReplicateImageClient(settings.replicate_api_token)
             price_per_second_usd = PROVISIONAL_PRICE_PER_SECOND_USD
             logger.info("Real video provider: Replicate (wan-video/wan-2.2-s2v)")
+            logger.info("Real image provider: Replicate (black-forest-labs/flux-dev)")
         else:
             fal_video = RealFalVideoClient(settings.fal_key)
+            image_client = RealFalImageClient(settings.fal_key)
             price_per_second_usd = REAL_BILLED_PRICE_PER_SECOND_USD
             logger.info("Real video provider: fal.ai (fal-ai/wan/v2.2-14b/speech-to-video)")
+            logger.info("Real image provider: fal.ai (fal-ai/flux/dev)")
         dialogue_writer = DialogueWriterAgent(reasoning)
         dialogue_pipeline = DialoguePipeline(
             fal_video, tts, settings.output_dir,
             tts_lang=settings.azure_tts_lang,
             max_cost_usd=settings.max_episode_cost_usd,
-            # Owner's instruction, 2026-10-20: a real, story-specific
-            # photo per character (not a fixed panel of six reused
-            # forever) - fal-ai/flux/dev (see image_client.py), a
-            # separate real endpoint from video generation, unaffected
-            # by which video provider is chosen above.
-            image_client=RealFalImageClient(settings.fal_key) if settings.fal_configured else None,
+            image_client=image_client,
             price_per_second_usd=price_per_second_usd,
         )
     elif force_mocks:

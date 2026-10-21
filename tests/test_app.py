@@ -3,6 +3,8 @@ from __future__ import annotations
 from src.app import build_app
 from src.config import Settings
 from src.integrations.fal_video_client import REAL_BILLED_PRICE_PER_SECOND_USD, RealFalVideoClient
+from src.integrations.image_client import RealFalImageClient
+from src.integrations.replicate_image_client import RealReplicateImageClient
 from src.integrations.replicate_video_client import PROVISIONAL_PRICE_PER_SECOND_USD, RealReplicateVideoClient
 
 
@@ -52,6 +54,26 @@ def test_build_app_honors_an_explicit_video_provider_override():
     app = build_app(_settings(fal_key="fal-real", replicate_api_token="r8_real", video_provider="fal"))
 
     assert isinstance(app.fal_video, RealFalVideoClient)
+
+
+def test_build_app_never_constructs_a_fal_client_when_replicate_is_chosen():
+    # Owner's standing instruction, 2026-10-21 ("لا تضع السراق ... احذفهم
+    # من الكود" - don't put the thieves [fal.ai] in, remove them from
+    # the code): with Replicate chosen (even when FAL_KEY is ALSO set,
+    # as it genuinely is on the real deployment - fal.ai must never be
+    # constructed or called for EITHER video or the character portrait.
+    app = build_app(_settings(fal_key="fal-real", replicate_api_token="r8_real"))
+
+    assert isinstance(app.fal_video, RealReplicateVideoClient)
+    assert isinstance(app.dialogue_pipeline._image_client, RealReplicateImageClient)
+    assert not isinstance(app.fal_video, RealFalVideoClient)
+    assert not isinstance(app.dialogue_pipeline._image_client, RealFalImageClient)
+
+
+def test_build_app_uses_fal_for_images_too_when_fal_is_explicitly_chosen():
+    app = build_app(_settings(fal_key="fal-real", replicate_api_token="r8_real", video_provider="fal"))
+
+    assert isinstance(app.dialogue_pipeline._image_client, RealFalImageClient)
 
 
 def test_build_app_has_no_real_pipeline_when_neither_video_provider_is_configured():

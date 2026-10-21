@@ -15,19 +15,22 @@
 مرجعية حقيقية فوتوغرافية لكل شخصية (`fal-ai/flux/dev`) مولّدة من وصفها في
 هذا السيناريو بالذات - ثم دمج كل المقاطع في فيلم واحد.
 
-**مزوّد الفيديو الحقيقي قابل للاختيار** (`src/integrations/fal_video_client.py`
-أو `src/integrations/replicate_video_client.py`، كلاهما بنفس الواجهة):
-- **fal.ai** (`fal-ai/wan/v2.2-14b/speech-to-video`) - الافتراضي السابق.
-  **تنبيه حقيقي**: راجع `docs/SOURCES.md` ("fal.ai billed every real
-  speech-to-video call at the 720p rate...") - فاتورة حقيقية أثبتت أن
-  fal.ai يحتسب كل طلب بسعر 720p رغم أن الكود يطلب 480p دائماً.
-- **Replicate** (`wan-video/wan-2.2-s2v`) - أُضيف 2026-10-21 بعد اختبار
-  حقيقي أثبت أن السعر المعروض عندهم يطابق المخصوم فعلياً تماماً (بلا أي
-  تناقض، بعكس fal.ai). `VIDEO_PROVIDER=replicate` أو `=fal` يختار
-  صراحةً؛ بدون تحديد، **Replicate هو الافتراضي الآن** إن كان
-  `REPLICATE_API_TOKEN` موجوداً، وإلا fal.ai. راجع `docs/SOURCES.md`
-  ("A second real video provider: Replicate...") للتفاصيل والأدلة
-  الحقيقية الكاملة.
+**مزوّد الفيديو والصور الحقيقي قابل للاختيار**، كلاهما معاً (`src/app.py`
+يختار نفس المزوّد للاثنين، ليضمن عدم استدعاء fal.ai إطلاقاً عند اختيار
+Replicate):
+- **fal.ai** (فيديو: `fal-ai/wan/v2.2-14b/speech-to-video`، صور:
+  `fal-ai/flux/dev`) - **تنبيه حقيقي**: راجع `docs/SOURCES.md` ("fal.ai
+  billed every real speech-to-video call at the 720p rate...") - فاتورة
+  حقيقية أثبتت أن fal.ai يحتسب كل طلب بسعر 720p رغم أن الكود يطلب 480p
+  دائماً.
+- **Replicate** (فيديو: `wan-video/wan-2.2-s2v`، صور:
+  `black-forest-labs/flux-dev`) - **الافتراضي الآن** (أمر المالك
+  الصريح، 2026-10-21: "لا تضع السراق ... احذفهم من الكود" - fal.ai
+  مُستبعد تماماً من المسار الفعلي، للفيديو وللصور معاً، ما دام
+  `REPLICATE_API_TOKEN` موجوداً). `VIDEO_PROVIDER=replicate` أو `=fal`
+  يختار صراحةً. راجع `docs/SOURCES.md` ("A second real video provider:
+  Replicate..." و"fal.ai removed from the active path entirely...")
+  للتفاصيل والأدلة الحقيقية الكاملة.
 
 **لا توجد أي صورة احتياطية/ثابتة بأي شكل** - لا لوحة من ست صور، ولا أي
 صورة أخرى تُستعمل عند فشل التوليد الحقيقي. إن تعذّر توليد صورة حقيقية
