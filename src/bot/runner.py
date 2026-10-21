@@ -168,8 +168,27 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         # an unretrieved Task exception - the exact "owner gets total
         # silence" failure class _produce_and_notify was already fixed for
         # on 2026-10-19, reachable again here through the new router.
+        #
+        # Second, more severe real gap, caught live minutes later: this
+        # called conversation.handle_message() DIRECTLY on the event loop
+        # - a real, synchronous reasoning-client HTTP call
+        # (RealGroqReasoningClient's own fallback to
+        # RealGeminiReasoningClient, whose own retry path calls
+        # time.sleep() up to 20s per attempt, 3 attempts). This fires on
+        # EVERY debounced free-text message now - far more often than
+        # /new or /full ever did - and while it runs, it blocks the
+        # ENTIRE bot's event loop, every chat, every handler. The owner
+        # hit this directly: pressed the ✅ approve button while a router
+        # call was in flight, and Telegram's own real error came back
+        # ("Query is too old and response timeout expired or query id is
+        # invalid") because the bot could not answer the callback in
+        # time - the event loop was fully blocked on this call and never
+        # got to it. Same fix _produce_and_notify already uses for its
+        # own slow call: run it in the executor so the event loop - and
+        # every button press on it - stays free the whole time.
+        loop = asyncio.get_running_loop()
         try:
-            reply = conversation.handle_message(chat_id, "")
+            reply = await loop.run_in_executor(None, conversation.handle_message, chat_id, "")
         except Exception as exc:
             await context.bot.send_message(chat_id=chat_id, text=f"⚠️ تعذّر فهم رسالتك بسبب خطأ تقني: {exc}")
             return
@@ -249,7 +268,19 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         raw_text = update.message.text or ""
         parts = raw_text.split(None, 1)
         args_text = parts[1] if len(parts) == 2 else ""
-        reply = conversation.handle_new(chat_id, args_text)
+        # Real bug found live, 2026-10-21 ("Query is too old and response
+        # timeout expired" on an unrelated button press): handle_new()
+        # makes TWO real, synchronous reasoning-client HTTP calls (cast,
+        # then lines) - RealGeminiReasoningClient's own retry path can
+        # call time.sleep() for up to 20s per attempt, 3 attempts, fully
+        # blocking. Called directly like this, that blocks the ENTIRE
+        # bot's event loop - every chat, every button press - for the
+        # whole duration, not just this one. Same fix _produce_and_notify
+        # already uses for its own slow call: run it in the executor so
+        # the event loop stays free to answer a callback query (which
+        # Telegram invalidates if left unanswered too long) the whole time.
+        loop = asyncio.get_running_loop()
+        reply = await loop.run_in_executor(None, conversation.handle_new, chat_id, args_text)
         await _send_reply(chat_id, context, reply)
 
     async def _full(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -260,7 +291,10 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         raw_text = update.message.text or ""
         parts = raw_text.split(None, 1)
         args_text = parts[1] if len(parts) == 2 else ""
-        reply = conversation.handle_full(chat_id, args_text)
+        # Same event-loop-blocking real reasoning-client call, same fix,
+        # as _new above.
+        loop = asyncio.get_running_loop()
+        reply = await loop.run_in_executor(None, conversation.handle_full, chat_id, args_text)
         await _send_reply(chat_id, context, reply)
 
     async def _text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
