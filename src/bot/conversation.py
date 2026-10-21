@@ -218,37 +218,42 @@ class BotConversation:
 
         if routed.intent == "build_screenplay":
             # Real, live bug found 2026-10-21, directly from the owner's
-            # own confusion ("لم اعد افهمك... لم اعد افهم البوت"): in the
-            # real deployed system, handle_message() is ONLY ever called
-            # from runner.py's debounce path with an empty text - _text
-            # never calls it directly, only accumulates and (re)starts the
-            # debounce timer. That means pulled_from_pending is ALWAYS
-            # true in production, and a story that looks "ready to build"
-            # to the router (even without the owner asking for it yet)
-            # would silently auto-build and CONSUME pending_text roughly
-            # 1.5s after the owner went quiet - racing the owner's own
-            # following /full or /new command. If that command landed
-            # after the auto-build already fired, it found nothing left
-            # to build from ("الاستخدام: ...") even though the owner had
-            # JUST sent a real story - exactly what was observed live,
-            # repeatedly, and is indistinguishable from a bug to anyone
-            # watching it happen.
+            # own confusion ("لم اعد افهمك... لم اعد افهم البوت"): with
+            # handle_message() only ever reachable from runner.py's
+            # debounce path, a story that looked "ready to build" used to
+            # auto-build and CONSUME pending_text while the owner's own
+            # /full or /new could still be racing it on another thread -
+            # two real, separate fixes that evening (see docs/SOURCES.md)
+            # closed that race structurally: pending_text is never cleared
+            # speculatively any more (read above), and runner.py now
+            # cancels any still-pending debounce task the instant an
+            # explicit command arrives. With the actual race gone, this
+            # no longer needs to refuse auto-building outright.
             #
-            # Fixed by removing the race outright: a debounce-driven call
-            # never auto-builds. The owner's own explicit /full or /new -
-            # or a genuinely real-time, non-empty message (e.g. a direct
-            # caller, never the live bot) - are the only paths that still
-            # build a screenplay. pending_text was never touched above, so
-            # it is already exactly as it was - /full or /new right after
-            # this reply sees the real, complete text, every time.
-            if pulled_from_pending:
-                return BotReply(
-                    text=(
-                        f"{routed.reply}\n\n"
-                        "لبناء السيناريو فعليًا، أرسل /full (لاستخدام كل كلمة حرفيًا) أو /new (لتلخيص تلقائي) الآن."
-                    )
-                )
-            premise = f"{state.pending_text}\n{source_text}".strip() if state.pending_text else source_text
+            # Owner's explicit instruction, same evening, once that race
+            # was actually fixed ("السيناريو تلقائيا مع الاختيار يبقى هو
+            # لي" - build it automatically, but the choice stays mine):
+            # free conversation builds the screenplay on its own once the
+            # owner goes quiet - no /full or /new needed for the common
+            # case - but an explicit /full or /new sent before that still
+            # always wins (cancels the pending auto-build outright via
+            # runner.py's _cancel_debounce, never just races it), so the
+            # owner's own explicit choice of mode is never silently
+            # pre-empted by the automatic path.
+            # Real bug caught by the test for this exact change, 2026-10-21:
+            # when pulled_from_pending, source_text already IS
+            # state.pending_text (read verbatim at the top of this
+            # method) - concatenating them again here duplicated the
+            # owner's own words, which then counted every real quoted
+            # moment twice (count_quoted_moments on the doubled text) and
+            # asked the model for twice as many lines as the real premise
+            # actually has. Only the direct-call, non-empty-text path has
+            # genuinely separate pending_text + new text to combine.
+            premise = (
+                source_text
+                if pulled_from_pending
+                else (f"{state.pending_text}\n{source_text}".strip() if state.pending_text else source_text)
+            )
             if not premise:
                 return BotReply(text=routed.reply)
             try:
