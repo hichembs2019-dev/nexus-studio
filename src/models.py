@@ -24,27 +24,37 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Character:
-    """A speaking role, carried across an episode (and meant to be reused
-    across a whole series) by a FIXED reference photo - Wan 2.2's
-    speech-to-video call (see fal_video_client.py) takes one reference
-    image per clip, and reusing the same image for every line this
-    character speaks is what keeps their face the same person scene to
-    scene. Without a real photo here there is no consistency to keep -
-    DialoguePipeline raises rather than silently generating a different
-    face per line."""
+    """A speaking role. Wan 2.2's speech-to-video call (see
+    fal_video_client.py) takes one reference image per clip, and reusing
+    the same real image for every line this character speaks is what
+    keeps their face the same person scene to scene - DialoguePipeline
+    generates that real image itself, from `appearance` below, and
+    refuses to produce a line for a character it could not generate one
+    for (see DialoguePipeline's own docstring).
+
+    Owner's standing instruction, 2026-10-21 ("احذف الستة صور و قلت
+    التوليد حسب القصة" - delete the six photos, I told you generation
+    must be per-story): there used to also be a `reference_image_path`
+    field here, always pre-filled at screenplay-write time with one of
+    six generic placeholder illustrations (`character_photos.py`'s
+    `resolve_placeholder_photo`) and reused as DialoguePipeline's silent
+    fallback whenever real per-story generation failed or was
+    unavailable. Deleted outright, field and all: there is no longer any
+    fixed/generic photo anywhere in this codebase, for any reason - a
+    character either gets a real photo generated from its own
+    `appearance` during production, or that character's lines fail and
+    are reported, never a stand-in face.
+    """
 
     name: str
-    reference_image_path: str
     voice: str = "ar-SY-LaithNeural"
     # Owner's instruction, 2026-10-20, rejecting a fixed panel of six
     # generic photos reused across every story forever ("لا تكون صور
     # ثابتة الى الابد ... بل حسب القصة و السيناريو" - not fixed forever,
     # but according to the story and screenplay): a short visual
-    # description (hair, build, distinguishing features) inferred from
-    # THIS premise by the same cast-writing LLM call that already infers
-    # gender/age_group - DialoguePipeline uses it to generate a real,
-    # story-specific reference photo per character instead of reusing one
-    # of a handful of generic ones across unrelated stories.
+    # description (hair, build, distinguishing features, age) inferred
+    # from THIS premise by the cast-writing LLM call - the ONLY source
+    # DialoguePipeline ever generates a character's real photo from.
     appearance: str = ""
 
 

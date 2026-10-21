@@ -16,12 +16,20 @@ two ways is two different reference photos) - cast first, then lines
 constrained to that exact roster.
 
 Owner's instruction, 2026-10-19 ("الصور طبعا افتراضية... تُسند تلقائيًا
-حسب وصف كل شخصية" - the photos are of course placeholders, assigned
-automatically per character description): the cast step now also infers
-each character's gender/age_group, and every Character is built with a
-real reference_image_path and voice already assigned (see
-character_photos.py) - never the empty string DialoguePipeline refuses
-to accept.
+حسب وصف كل شخصية"): the cast step infers each character's gender and
+voice is assigned automatically (see character_photos.py).
+
+Owner's standing instruction, 2026-10-21 ("احذف الستة صور و قلت التوليد
+حسب القصة" - delete the six photos, I told you generation must be
+per-story): the six generic placeholder photos this agent used to assign
+every character at screenplay-write time (`resolve_placeholder_photo`,
+keyed by gender/age_group) are deleted outright, not merely stopped from
+being used - see character_photos.py and dialogue_pipeline.py's own
+docstrings. No photo is ever assigned here any more: `Character` carries
+only `appearance` (the real per-story description DialoguePipeline
+generates a real photo from during production). `age_group` is removed
+from the cast step entirely - it existed only to pick a placeholder
+photo size/style, and has no other consumer anywhere in this codebase.
 
 Real finding, 2026-10-19 ("القصة يجب ان تكون كما طلبتها بالظبط بدون
 تحويل" - the story must be exactly as I asked for it, no alteration):
@@ -112,17 +120,16 @@ import re
 from src.agents._text_parsing import parse_json_object_array
 from src.integrations.reasoning_client import AgentReasoningClient
 from src.models import Character, DialogueLine, DialogueScreenplay
-from src.workflows.character_photos import resolve_placeholder_photo, resolve_placeholder_voice
+from src.workflows.character_photos import resolve_placeholder_voice
 
 _CAST_SYSTEM_PROMPT = """You are a casting director listing the speaking characters a short story needs.
 
 Rules:
 - Output ONLY a JSON array of objects, nothing else - no markdown fences, no commentary.
-- Each object has exactly four keys:
+- Each object has exactly three keys:
   - "name": the character's name, as it should appear consistently everywhere (same spelling every time).
   - "gender": "male" or "female" - your best real inference from how the premise describes or refers to them.
-  - "age_group": "young" (child/teen/20s), "middle" (30s-50s), or "older" (60+) - your best real inference.
-  - "appearance": a short (one sentence, English) physical description for generating a reference photo of THIS character - hair color/style, build, any distinguishing feature the premise mentions. If the premise gives no physical detail, invent a plausible, ordinary one consistent with their gender/age/role - never leave this generic or reuse the exact same wording for two different characters in the same cast.
+  - "appearance": a short (one sentence, English) physical description for generating a REAL, photorealistic reference photo of THIS character, specific to this story - hair color/style, build, age, any distinguishing feature the premise mentions. If the premise gives no physical detail, invent a plausible, ordinary one consistent with their gender/role - never leave this generic or reuse the exact same wording for two different characters in the same cast.
 - Only characters who actually SPEAK a line - no narrators, no silent background characters.
 - NEVER create a character named/role "narrator", "راوي", "الراوي" or similar. If the premise is written as first-person memoir/narrative prose (e.g. "كنت..."/"I was..."), the person telling it is a REAL character who appears in the scenes and speaks real dialogue - cast them by their actual name if the premise gives one, otherwise by their real role in the story (e.g. "الزوج"/"the husband", "الأب"/"the father") - never as "narrator".
 - 2 to 10 characters, names in the SAME language/script as the premise."""
@@ -265,12 +272,6 @@ class DialogueWriterAgent:
         characters = [
             Character(
                 name=c["name"],
-                # The cheap generic placeholder, used only as a free
-                # preview before Approve and as DialoguePipeline's fallback
-                # if real portrait generation fails - DialoguePipeline
-                # replaces this with a real, story-specific photo
-                # generated from `appearance` once production is approved.
-                reference_image_path=resolve_placeholder_photo(c["gender"], c["age_group"]),
                 voice=resolve_placeholder_voice(c["gender"]),
                 appearance=c["appearance"],
             )
@@ -300,19 +301,19 @@ class DialogueWriterAgent:
             # Real bug found by code review, 2026-10-19: this only
             # checked the keys existed, never that their values were
             # real non-empty strings. A model reply like {"name": "X",
-            # "gender": null, "age_group": "middle"} passed this check,
-            # then crashed deeper with an uncaught AttributeError inside
-            # character_photos.py's None.strip() instead of a clear
-            # error here - exactly the kind of failure the global error
-            # handler (runner.py) now at least reports, but this is the
-            # right place to catch it with a real, specific message.
+            # "gender": null} passed this check, then crashed deeper
+            # with an uncaught AttributeError inside character_photos.py's
+            # None.strip() instead of a clear error here - exactly the
+            # kind of failure the global error handler (runner.py) now
+            # at least reports, but this is the right place to catch it
+            # with a real, specific message.
             if not isinstance(item, dict) or not all(
                 isinstance(item.get(k), str) and item.get(k).strip()
-                for k in ("name", "gender", "age_group", "appearance")
+                for k in ("name", "gender", "appearance")
             ):
                 raise DialogueWriterError(
                     f"Cast reply item {item!r} is missing or has a non-string/empty "
-                    f"'name'/'gender'/'age_group'/'appearance': {raw_reply!r}"
+                    f"'name'/'gender'/'appearance': {raw_reply!r}"
                 )
             if _NARRATOR_NAME_PATTERN.search(item["name"]):
                 raise DialogueWriterError(

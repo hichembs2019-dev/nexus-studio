@@ -13,7 +13,7 @@ from src.models import Character, DialogueLine, DialogueScreenplay, ProducedDial
 
 def _cast_reply(*people):
     return json.dumps(
-        [{"name": n, "gender": g, "age_group": a, "appearance": f"{g}, {a}, ordinary appearance"} for n, g, a in people]
+        [{"name": n, "gender": g, "appearance": f"{g}, ordinary appearance"} for n, g in people]
     )
 
 
@@ -29,7 +29,7 @@ def _conversation(reasoning_replies: list[str], youtube_video_ids: list[str] | N
 
 
 def test_new_with_explicit_seconds_writes_a_screenplay_sized_to_them():
-    cast = _cast_reply(("فوزية", "female", "middle"))
+    cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "beat one", "smiling"), ("فوزية", "beat two", "waving"))
     conversation, _ = _conversation([cast, lines])
 
@@ -44,7 +44,7 @@ def test_new_without_a_leading_number_uses_the_default_duration_and_whole_text_a
     from src.bot.conversation import DEFAULT_TARGET_SECONDS
 
     line_count = max(2, round(DEFAULT_TARGET_SECONDS / ESTIMATED_SECONDS_PER_LINE))
-    cast = _cast_reply(("فوزية", "female", "middle"))
+    cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(*[("فوزية", f"b{i}", "") for i in range(line_count)])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast, lines])
     conversation = BotConversation(DialogueWriterAgent(reasoning), PublishingAgent({}))
@@ -81,7 +81,7 @@ def test_new_refuses_when_the_premise_has_more_real_quotes_than_its_line_count_w
 
 
 def test_new_allows_a_premise_whose_real_quote_count_fits_its_line_count():
-    cast = _cast_reply(("فوزية", "female", "middle"))
+    cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "one", ""), ("فوزية", "two", ""))
     conversation, _ = _conversation([cast, lines])
     premise = f'{int(2 * ESTIMATED_SECONDS_PER_LINE)} "واحد" "اثنان"'  # 2 real quotes, 2 lines - exactly fits
@@ -96,7 +96,7 @@ def test_plain_text_messages_are_accumulated_and_new_without_args_uses_them_verb
     # message (~900 real words) into several plain messages, and only the
     # first carries /new - the rest must still reach the writer, whole,
     # not summarized.
-    cast = _cast_reply(("فوزية", "female", "middle"))
+    cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
     conversation, _ = _conversation([cast, lines])
 
@@ -111,9 +111,9 @@ def test_plain_text_messages_are_accumulated_and_new_without_args_uses_them_verb
 
 
 def test_plain_text_accumulation_is_cleared_after_a_screenplay_is_built():
-    cast1 = _cast_reply(("فوزية", "female", "middle"))
+    cast1 = _cast_reply(("فوزية", "female"))
     lines1 = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
-    cast2 = _cast_reply(("جويدة", "female", "young"))
+    cast2 = _cast_reply(("جويدة", "female"))
     lines2 = _lines_reply(("جويدة", "new idea beat", ""), ("جويدة", "new idea beat two", ""))
     conversation, _ = _conversation([cast1, lines1, cast2, lines2])
 
@@ -141,7 +141,7 @@ def test_full_builds_a_screenplay_with_no_duration_and_one_line_per_real_quote()
     # estimates a line_count - it uses exactly as many lines as the real
     # story has quoted moments.
     premise = 'قال: «مرحبا يا فوزية» فقالت: «أهلا بك»'
-    cast = _cast_reply(("الرجل", "male", "middle"), ("فوزية", "female", "middle"))
+    cast = _cast_reply(("الرجل", "male"), ("فوزية", "female"))
     lines = _lines_reply(("الرجل", "مرحبا يا فوزية", ""), ("فوزية", "أهلا بك", ""))
     conversation, _ = _conversation([cast, lines])
 
@@ -154,7 +154,7 @@ def test_full_builds_a_screenplay_with_no_duration_and_one_line_per_real_quote()
 
 def test_full_uses_accumulated_plain_text_when_no_args_given():
     premise = 'قال: «مرحبا يا فوزية» فقالت: «أهلا بك»'
-    cast = _cast_reply(("الرجل", "male", "middle"), ("فوزية", "female", "middle"))
+    cast = _cast_reply(("الرجل", "male"), ("فوزية", "female"))
     lines = _lines_reply(("الرجل", "مرحبا يا فوزية", ""), ("فوزية", "أهلا بك", ""))
     conversation, _ = _conversation([cast, lines])
 
@@ -173,7 +173,7 @@ def test_full_with_no_text_at_all_asks_for_the_story_without_calling_the_writer(
 
 
 def test_edit_updates_the_named_line_and_resends_the_screenplay():
-    cast = _cast_reply(("فوزية", "female", "middle"))
+    cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
     conversation, _ = _conversation([cast, lines])
     conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
@@ -186,7 +186,7 @@ def test_edit_updates_the_named_line_and_resends_the_screenplay():
 
 
 def test_edit_on_an_out_of_range_line_reports_it_clearly():
-    cast = _cast_reply(("فوزية", "female", "middle"))
+    cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
     conversation, _ = _conversation([cast, lines])
     conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
@@ -211,7 +211,7 @@ def test_edit_updates_several_lines_from_one_multiline_message():
     # scene? it should edit ALL scenes, the freedom is mine): one /edit
     # message, several "<number> <text>" edits, one per real line,
     # applied together in a single pass.
-    cast = _cast_reply(("فوزية", "female", "middle"))
+    cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""), ("فوزية", "beat three", ""))
     conversation, _ = _conversation([cast, lines])
     conversation.handle_new("chat1", f"{int(3 * ESTIMATED_SECONDS_PER_LINE)} idea")
@@ -226,7 +226,7 @@ def test_edit_updates_several_lines_from_one_multiline_message():
 
 
 def test_edit_reports_not_found_lines_but_still_applies_the_valid_ones():
-    cast = _cast_reply(("فوزية", "female", "middle"))
+    cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
     conversation, _ = _conversation([cast, lines])
     conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
@@ -239,7 +239,7 @@ def test_edit_reports_not_found_lines_but_still_applies_the_valid_ones():
 
 
 def test_edit_with_blank_lines_in_the_message_ignores_them():
-    cast = _cast_reply(("فوزية", "female", "middle"))
+    cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
     conversation, _ = _conversation([cast, lines])
     conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
@@ -257,7 +257,7 @@ def test_caption_marks_a_line_as_on_screen_text_with_zero_estimated_cost():
     # /caption flips a line to spoken=False, which DialoguePipeline then
     # produces for real zero cost - the owner must see this reflected in
     # the estimate BEFORE approving, not discover it only afterward.
-    cast = _cast_reply(("فوزية", "female", "middle"), ("جويدة", "female", "young"))
+    cast = _cast_reply(("فوزية", "female"), ("جويدة", "female"))
     lines = _lines_reply(("فوزية", "beat one", ""), ("جويدة", "beat two", ""))
     conversation, _ = _conversation([cast, lines])
     conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
@@ -273,7 +273,7 @@ def test_caption_marks_a_line_as_on_screen_text_with_zero_estimated_cost():
 
 
 def test_caption_on_an_out_of_range_line_reports_it_clearly():
-    cast = _cast_reply(("فوزية", "female", "middle"))
+    cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
     conversation, _ = _conversation([cast, lines])
     conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
@@ -293,7 +293,7 @@ def test_caption_without_a_draft_tells_the_user_to_start_with_new():
 
 
 def test_caption_with_no_numbers_shows_usage():
-    cast = _cast_reply(("فوزية", "female", "middle"))
+    cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
     conversation, _ = _conversation([cast, lines])
     conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
@@ -304,7 +304,7 @@ def test_caption_with_no_numbers_shows_usage():
 
 
 def test_approve_returns_the_exact_draft_screenplay_for_real_production():
-    cast = _cast_reply(("فوزية", "female", "middle"))
+    cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
     conversation, _ = _conversation([cast, lines])
     conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
@@ -327,7 +327,7 @@ def test_approve_without_a_draft_returns_none_screenplay():
 
 def test_format_produced_offers_publish_buttons_when_stitched():
     conversation, _ = _conversation([])
-    screenplay = DialogueScreenplay(title="T", premise="p", characters=[Character(name="X", reference_image_path="/x.png")], lines=[])
+    screenplay = DialogueScreenplay(title="T", premise="p", characters=[Character(name="X")], lines=[])
     clip = ProducedDialogueClip(line=DialogueLine(index=0, character="X", line="hi"), local_path="/tmp/c0.mp4", cost_usd=0.4)
     produced = ProducedDialogueEpisode(screenplay=screenplay, clips=[clip], stitched_path="/tmp/out.mp4")
 
@@ -464,7 +464,7 @@ def test_publish_to_unconfigured_platform_reports_the_failure():
 
 
 def test_cancel_clears_the_draft_so_approve_then_fails():
-    cast = _cast_reply(("فوزية", "female", "middle"))
+    cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
     conversation, _ = _conversation([cast, lines])
     conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
@@ -477,9 +477,9 @@ def test_cancel_clears_the_draft_so_approve_then_fails():
 
 
 def test_chats_are_independent():
-    cast1 = _cast_reply(("فوزية", "female", "middle"))
+    cast1 = _cast_reply(("فوزية", "female"))
     lines1 = _lines_reply(("فوزية", "chat1 beat", ""), ("فوزية", "chat1 beat two", ""))
-    cast2 = _cast_reply(("جويدة", "female", "young"))
+    cast2 = _cast_reply(("جويدة", "female"))
     lines2 = _lines_reply(("جويدة", "chat2 beat", ""), ("جويدة", "chat2 beat two", ""))
     conversation, _ = _conversation([cast1, lines1, cast2, lines2])
 

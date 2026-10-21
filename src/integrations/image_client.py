@@ -1,21 +1,25 @@
 """fal.ai's queue REST API for fal-ai/flux/dev - a real text-to-image
-model, used to generate the six photorealistic character reference
-photos character_photos.py caches once and reuses forever after (see
-that module's own docstring for why a FIXED photo per gender/age_group
-exists at all).
+model, used by DialoguePipeline (`_resolve_character_photo`) to generate
+one real photorealistic reference photo per (this screenplay, this
+character), from that character's own `appearance` text - never a
+fixed photo reused across stories, and never a generic placeholder.
 
 Owner's instruction, 2026-10-20 (reacting to the six hand-drawn cartoon
 placeholders actually appearing in a real produced video - "هذه هي
 الصور التي اقصدها... لا صور متحركة" - these are the photos I mean, not
-cartoon ones, showing a real photorealistic reference photo): the
-cartoon placeholders were a deliberate earlier choice (see
-character_photos.py, "الصور طبعا افتراضية") made before anyone had
-actually SEEN the pipeline's final output with them - once seen, they
-were rejected. This client exists to replace them with real
-AI-generated (not a real person's likeness - no copyright/consent
-question) photorealistic portraits, generated once per gender/age_group
-combination and cached, same "fixed photo, reused every time" principle
-the cartoon placeholders already established.
+cartoon ones, showing a real photorealistic reference photo): this
+client exists to generate real AI photos (not a real person's likeness
+- no copyright/consent question) instead of the cartoon placeholders
+that preceded it.
+
+Owner's standing instruction, 2026-10-21 ("احذف الستة صور و قلت التوليد
+حسب القصة" - delete the six photos, I told you generation must be
+per-story): the cartoon placeholders, and the intermediate idea of
+caching one real photo per gender/age_group and reusing it across
+unrelated stories, are both deleted outright - see models.py's and
+character_photos.py's own docstrings. There is no fallback photo of any
+kind left anywhere: if this client fails or is unavailable, that
+character's lines fail and are reported, never a stand-in face.
 
 Contract verified live against fal's own model page 2026-10-20 (WebFetch
 of https://fal.ai/models/fal-ai/flux/dev, not guessed):

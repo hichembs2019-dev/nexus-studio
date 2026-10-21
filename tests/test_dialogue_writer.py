@@ -10,12 +10,12 @@ from src.integrations.reasoning_client import MockAgentReasoningClient
 
 def _cast_reply(*people):
     return json.dumps(
-        [{"name": n, "gender": g, "age_group": a, "appearance": f"{g}, {a}, ordinary appearance"} for n, g, a in people]
+        [{"name": n, "gender": g, "appearance": f"{g}, ordinary appearance"} for n, g in people]
     )
 
 
 def test_write_dialogue_screenplay_builds_cast_then_lines():
-    cast_reply = _cast_reply(("فوزية", "female", "middle"), ("جويدة", "female", "young"))
+    cast_reply = _cast_reply(("فوزية", "female"), ("جويدة", "female"))
     lines_reply = json.dumps(
         [
             {"character": "فوزية", "line": "العشاء جاهز يا جويدة", "action": "smiling, setting the table"},
@@ -29,11 +29,8 @@ def test_write_dialogue_screenplay_builds_cast_then_lines():
 
     assert screenplay.title == "Family Dinner"
     assert [c.name for c in screenplay.characters] == ["فوزية", "جويدة"]
-    # Owner's instruction, 2026-10-19: real placeholder photos/voices are
-    # always assigned automatically - never the empty string
-    # DialoguePipeline refuses to accept.
-    assert all(c.reference_image_path for c in screenplay.characters)
-    assert all(c.reference_image_path.endswith(".png") for c in screenplay.characters)
+    # Owner's instruction, 2026-10-19: a real voice is always assigned
+    # automatically - never the empty string.
     assert all(c.voice for c in screenplay.characters)
     assert [l.character for l in screenplay.lines] == ["فوزية", "جويدة"]
     assert screenplay.lines[0].line == "العشاء جاهز يا جويدة"
@@ -52,7 +49,7 @@ def test_write_dialogue_screenplay_lines_prompt_requires_verbatim_quotes_and_for
     # the prompt sent to the model, not merely that the method runs -
     # a check that only asserts the call happened would pass with this
     # instruction deleted.
-    cast_reply = _cast_reply(("فوزية", "female", "middle"))
+    cast_reply = _cast_reply(("فوزية", "female"))
     lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
@@ -72,7 +69,7 @@ def test_write_dialogue_screenplay_prompts_forbid_a_narrator_role():
     # then given lines that summarize past events instead of real
     # in-scene dialogue - the exact documentary-narration failure this
     # whole agent exists to prevent, reappearing through the cast step.
-    cast_reply = _cast_reply(("فوزية", "female", "middle"))
+    cast_reply = _cast_reply(("فوزية", "female"))
     lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
@@ -93,7 +90,7 @@ def test_write_dialogue_screenplay_lines_prompt_prioritizes_essential_quoted_mom
     # elsewhere, because the premise had more real quoted moments than
     # line_count allowed and the prompt gave no guidance on which to
     # keep.
-    cast_reply = _cast_reply(("فوزية", "female", "middle"))
+    cast_reply = _cast_reply(("فوزية", "female"))
     lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
@@ -117,7 +114,7 @@ def test_write_dialogue_screenplay_raises_if_the_model_casts_a_narrator_anyway()
     # and never calls the lines step once rejected, so no real cost is
     # risked on a screenplay that was going to be thrown away anyway.
     for narrator_name in ("الراوي", "راوي القصة", "Narrator", "The NARRATOR"):
-        cast_reply = _cast_reply(("فوزية", "female", "middle"), (narrator_name, "male", "middle"))
+        cast_reply = _cast_reply(("فوزية", "female"), (narrator_name, "male"))
         reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply])
         writer = DialogueWriterAgent(reasoning)
 
@@ -127,8 +124,14 @@ def test_write_dialogue_screenplay_raises_if_the_model_casts_a_narrator_anyway()
         assert len(reasoning.calls) == 1  # the lines step must never be reached
 
 
-def test_write_dialogue_screenplay_assigns_different_photos_by_gender_and_age():
-    cast_reply = _cast_reply(("Tom", "male", "older"), ("Amy", "female", "young"))
+def test_write_dialogue_screenplay_assigns_different_voices_by_gender():
+    # Owner's standing instruction, 2026-10-21 ("احذف الستة صور و قلت
+    # التوليد حسب القصة" - delete the six photos, generation must be
+    # per-story): the cast step no longer assigns any photo at all (no
+    # age_group, no placeholder path) - only a voice, by gender. The
+    # real, story-specific photo is generated later by DialoguePipeline
+    # itself, from `appearance`, never here.
+    cast_reply = _cast_reply(("Tom", "male"), ("Amy", "female"))
     lines_reply = json.dumps(
         [
             {"character": "Tom", "line": "Hello", "action": "waving"},
@@ -141,14 +144,12 @@ def test_write_dialogue_screenplay_assigns_different_photos_by_gender_and_age():
     screenplay = writer.write_dialogue_screenplay("T", "p", line_count=2)
 
     tom, amy = screenplay.characters
-    assert tom.reference_image_path != amy.reference_image_path
-    assert "male_older" in tom.reference_image_path
-    assert "female_young" in amy.reference_image_path
     assert tom.voice != amy.voice
+    assert not hasattr(tom, "reference_image_path")
 
 
 def test_write_dialogue_screenplay_raises_if_a_line_speaker_is_not_in_the_cast():
-    cast_reply = _cast_reply(("فوزية", "female", "middle"))
+    cast_reply = _cast_reply(("فوزية", "female"))
     lines_reply = json.dumps([{"character": "شخص غريب", "line": "مرحبا", "action": "waving"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
@@ -158,7 +159,7 @@ def test_write_dialogue_screenplay_raises_if_a_line_speaker_is_not_in_the_cast()
 
 
 def test_write_dialogue_screenplay_raises_if_too_few_lines_were_returned():
-    cast_reply = _cast_reply(("فوزية", "female", "middle"))
+    cast_reply = _cast_reply(("فوزية", "female"))
     lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
@@ -176,11 +177,11 @@ def test_write_dialogue_screenplay_raises_on_invalid_cast_json():
 
 
 def test_write_dialogue_screenplay_raises_if_cast_item_is_missing_a_required_field():
-    cast_reply = json.dumps([{"name": "فوزية", "gender": "female"}])  # missing age_group
+    cast_reply = json.dumps([{"name": "فوزية", "appearance": "ordinary"}])  # missing gender
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply])
     writer = DialogueWriterAgent(reasoning)
 
-    with pytest.raises(DialogueWriterError, match="age_group"):
+    with pytest.raises(DialogueWriterError, match="gender"):
         writer.write_dialogue_screenplay("T", "p", line_count=1)
 
 
@@ -189,8 +190,8 @@ def test_write_dialogue_screenplay_raises_if_cast_item_is_missing_appearance():
     # generic photos reused forever ("لا تكون صور ثابتة الى الابد ...
     # بل حسب القصة و السيناريو"): every cast member needs a real,
     # story-specific appearance description, validated the same way
-    # name/gender/age_group already are.
-    cast_reply = json.dumps([{"name": "فوزية", "gender": "female", "age_group": "middle"}])  # missing appearance
+    # name/gender already are.
+    cast_reply = json.dumps([{"name": "فوزية", "gender": "female"}])  # missing appearance
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply])
     writer = DialogueWriterAgent(reasoning)
 
@@ -200,7 +201,7 @@ def test_write_dialogue_screenplay_raises_if_cast_item_is_missing_appearance():
 
 def test_write_dialogue_screenplay_carries_the_real_appearance_onto_the_character():
     cast_reply = json.dumps(
-        [{"name": "فوزية", "gender": "female", "age_group": "middle", "appearance": "curly dark hair, slender build"}]
+        [{"name": "فوزية", "gender": "female", "appearance": "curly dark hair, slender build"}]
     )
     lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
@@ -212,7 +213,7 @@ def test_write_dialogue_screenplay_carries_the_real_appearance_onto_the_characte
 
 
 def test_write_dialogue_screenplay_strips_markdown_fences_on_both_calls():
-    cast_reply = "```json\n" + _cast_reply(("فوزية", "female", "middle")) + "\n```"
+    cast_reply = "```json\n" + _cast_reply(("فوزية", "female")) + "\n```"
     lines_reply = "```json\n" + json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}]) + "\n```"
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
@@ -239,7 +240,7 @@ def test_write_complete_dialogue_screenplay_requires_exactly_one_line_per_real_q
     # quotes to keep - the real count of quoted moments in the premise
     # drives everything, counted by this code, not guessed by the model.
     premise = 'قال: «مرحبا يا فوزية» فقالت: «أهلا بك» ثم قال: «كيف حالك اليوم؟»'
-    cast_reply = _cast_reply(("الرجل", "male", "middle"), ("فوزية", "female", "middle"))
+    cast_reply = _cast_reply(("الرجل", "male"), ("فوزية", "female"))
     lines_reply = json.dumps(
         [
             {"character": "الرجل", "line": "مرحبا يا فوزية", "action": "smiling"},
@@ -260,7 +261,7 @@ def test_write_complete_dialogue_screenplay_requires_exactly_one_line_per_real_q
 
 def test_write_complete_dialogue_screenplay_raises_if_the_model_drops_a_quoted_moment():
     premise = 'قال: «الأولى» وقال: «الثانية» وقال: «الثالثة»'
-    cast_reply = _cast_reply(("الرجل", "male", "middle"))
+    cast_reply = _cast_reply(("الرجل", "male"))
     lines_reply = json.dumps(
         [
             {"character": "الرجل", "line": "الأولى", "action": ""},
@@ -276,7 +277,7 @@ def test_write_complete_dialogue_screenplay_raises_if_the_model_drops_a_quoted_m
 
 def test_write_complete_dialogue_screenplay_prompt_forbids_narrator_and_demands_verbatim_copy():
     premise = 'قال: «مرحبا»'
-    cast_reply = _cast_reply(("الرجل", "male", "middle"))
+    cast_reply = _cast_reply(("الرجل", "male"))
     lines_reply = json.dumps([{"character": "الرجل", "line": "مرحبا", "action": ""}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
@@ -347,7 +348,7 @@ def test_parse_cast_rejects_a_null_field_value():
     # strings - {"gender": null} passed it and crashed deeper inside
     # character_photos.py's None.strip() instead of raising a clear
     # error here.
-    cast_reply = json.dumps([{"name": "X", "gender": None, "age_group": "middle"}])
+    cast_reply = json.dumps([{"name": "X", "gender": None, "appearance": "ordinary"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply])
     writer = DialogueWriterAgent(reasoning)
 
@@ -356,7 +357,7 @@ def test_parse_cast_rejects_a_null_field_value():
 
 
 def test_parse_cast_rejects_an_empty_string_field_value():
-    cast_reply = json.dumps([{"name": "X", "gender": "  ", "age_group": "middle"}])
+    cast_reply = json.dumps([{"name": "X", "gender": "  ", "appearance": "ordinary"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply])
     writer = DialogueWriterAgent(reasoning)
 

@@ -110,11 +110,11 @@ class DialoguePipeline:
         self._output_dir = output_dir
         self._tts_lang = tts_lang
         self._resolution = resolution
-        # Owner's instruction, 2026-10-20: None here means "no real photo
-        # generation available" - every character keeps the cheap generic
-        # placeholder resolve_placeholder_photo already assigned (same
-        # fallback used when real generation fails for one character),
-        # never an invented or missing face.
+        # Owner's standing instruction, 2026-10-21 ("احذف الستة صور و قلت
+        # التوليد حسب القصة"): None here means production simply cannot
+        # generate any real photo at all - every speaking character's
+        # lines then fail and are reported (see produce() below), never
+        # a generic/fixed placeholder face.
         self._image_client = image_client
         # Owner's instruction, 2026-10-20 ("قلت لك ضع له كود يشتغل و يسحب
         # المال الا عند صنع فيديو" - put code in that only draws money
@@ -141,35 +141,48 @@ class DialoguePipeline:
         # character has below - never per line, and never regenerated on
         # a retry of this same screenplay (the cache path is keyed to
         # this episode's own slug + character name).
+        #
+        # Owner's standing instruction, 2026-10-21 ("احذف الستة صور و
+        # قلت التوليد حسب القصة" - delete the six photos, I told you
+        # generation must be per-story): resolved_photos now holds an
+        # entry ONLY for a character whose real photo was actually
+        # generated (or found already cached) - never a fallback. A
+        # character missing from this dict has no usable photo at all,
+        # and every spoken line of theirs below fails instead of ever
+        # using a stand-in face.
         speaking_names = {l.character for l in screenplay.lines}
         resolved_photos: dict[str, str] = {}
         for character in screenplay.characters:
             if character.name not in speaking_names:
                 continue
             if self._max_cost_usd is not None and spent_so_far >= self._max_cost_usd:
-                resolved_photos[character.name] = character.reference_image_path
+                portrait_failures.append(
+                    (character.name, "تم الوصول للحد الأقصى للتكلفة قبل محاولة توليد صورة حقيقية لهذه الشخصية")
+                )
                 continue
             photo_path, cost, failure = self._resolve_character_photo(character, slug)
-            resolved_photos[character.name] = photo_path
             spent_so_far += cost
             portrait_cost_usd += cost
+            if photo_path is not None:
+                resolved_photos[character.name] = photo_path
             if failure:
                 portrait_failures.append((character.name, failure))
 
         # One shared group photo for every on-screen caption, built once
         # (free - just an ffmpeg hstack of portraits already resolved
-        # above) from the real photos of every character who has at
-        # least one non-spoken line. None if no line uses spoken=False.
+        # above) from the real photos of whichever captioned characters
+        # actually got one. A caption character with no resolved photo
+        # is simply left out of this shared image (a pre-existing,
+        # documented limitation - see README's "known limitation") -
+        # caption lines cost $0 either way and are never gated on this.
         caption_character_names = sorted(
             {l.character for l in screenplay.lines if not l.spoken},
             key=lambda n: next(i for i, l in enumerate(screenplay.lines) if l.character == n),
         )
+        resolved_caption_photos = [resolved_photos[n] for n in caption_character_names if n in resolved_photos]
         caption_group_image: str | None = None
-        if caption_character_names:
-            caption_group_image = self._build_caption_group_image(
-                [resolved_photos.get(n, characters_by_name[n].reference_image_path) for n in caption_character_names],
-                slug,
-            )
+        if resolved_caption_photos:
+            caption_group_image = self._build_caption_group_image(resolved_caption_photos, slug)
 
         for line in screenplay.lines:
             if self._max_cost_usd is not None and spent_so_far >= self._max_cost_usd:
@@ -182,25 +195,17 @@ class DialoguePipeline:
             character = characters_by_name.get(line.character)
             if character is None:
                 raise DialoguePipelineError(f"Line {line.index} speaker {line.character!r} is not in the cast")
-            if not character.reference_image_path:
-                raise DialoguePipelineError(
-                    f"Character {character.name!r} has no reference_image_path set - "
-                    "DialoguePipeline refuses to invent a face (that is exactly the "
-                    "'different person every scene' defect this pipeline exists to fix). "
-                    "Assign a real reference photo for this character before producing."
-                )
-            if not os.path.isfile(character.reference_image_path):
-                raise DialoguePipelineError(
-                    f"Character {character.name!r} reference_image_path "
-                    f"{character.reference_image_path!r} does not exist on disk"
-                )
-            photo_path = resolved_photos.get(character.name, character.reference_image_path)
 
             if not line.spoken:
                 # Zero real money spent on this line at all - no TTS, no
                 # fal.ai call. A local ffmpeg failure here still lands in
                 # failed_lines like any other line, but never carries the
                 # "real money was spent" prefix below, because none was.
+                if caption_group_image is None:
+                    failed_lines.append(
+                        (line, "لا توجد صورة حقيقية لأي من الشخصيات التي نصها مكتوب على الشاشة - لا توجد صورة احتياطية بأمر المالك")
+                    )
+                    continue
                 try:
                     prefix = f"{slug}_line{line.index:03d}"
                     duration = max(CAPTION_MIN_SECONDS, len(line.line) / CAPTION_CHARS_PER_SECOND)
@@ -209,6 +214,21 @@ class DialoguePipeline:
                     clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=0.0))
                 except Exception as exc:
                     failed_lines.append((line, str(exc)))
+                continue
+
+            # Owner's standing instruction, 2026-10-21 ("احذف الستة صور و
+            # قلت التوليد حسب القصة"): no fallback face exists any more -
+            # a character whose real per-story photo could not be
+            # generated (pre-pass above) simply has no usable photo, and
+            # every spoken line of theirs fails here instead of ever
+            # being produced with a stand-in face. Zero cost: this is
+            # checked before TTS or any fal.ai call is made.
+            photo_path = resolved_photos.get(character.name)
+            if photo_path is None:
+                reason = next((r for n, r in portrait_failures if n == character.name), "لم تُولَّد صورة حقيقية لهذه الشخصية")
+                failed_lines.append(
+                    (line, f"لا توجد صورة حقيقية لهذه الشخصية ({reason}) - لا توجد صورة احتياطية بأمر المالك")
+                )
                 continue
 
             # Real finding, 2026-10-19: a real 22-line run paid for and
@@ -291,20 +311,27 @@ class DialoguePipeline:
             portrait_failures=portrait_failures,
         )
 
-    def _resolve_character_photo(self, character: Character, slug: str) -> tuple[str, float, str | None]:
-        """Returns (path_to_use, real_cost_added_usd, failure_reason_or_None).
+    def _resolve_character_photo(self, character: Character, slug: str) -> tuple[str | None, float, str | None]:
+        """Returns (path_or_None, real_cost_added_usd, failure_reason_or_None).
         Generates at most once ever per (this screenplay, this character) -
         a cached file on disk short-circuits every later call, including a
-        retry of this same screenplay after an /edit. Falls back to the
-        character's own cheap placeholder on any real failure or when no
-        image client is configured, rather than aborting production."""
+        retry of this same screenplay after an /edit.
+
+        Owner's standing instruction, 2026-10-21 ("احذف الستة صور و قلت
+        التوليد حسب القصة" - delete the six photos, I told you generation
+        must be per-story): there is no fallback face any more. A real
+        failure, a missing `appearance`, or no configured image client
+        each return None - the caller (produce()) then fails that
+        character's lines instead of ever using a stand-in photo."""
         char_slug = re.sub(r"[^a-z0-9]+", "_", character.name.lower()).strip("_") or "character"
         cache_dir = os.path.join(self._output_dir, "characters")
         cache_path = os.path.join(cache_dir, f"{slug}_{char_slug}.jpg")
         if os.path.isfile(cache_path):
             return cache_path, 0.0, None
-        if self._image_client is None or not character.appearance:
-            return character.reference_image_path, 0.0, None
+        if self._image_client is None:
+            return None, 0.0, "لا يوجد اتصال حقيقي بمولّد الصور (FAL_KEY غير مُهيَّأ)"
+        if not character.appearance:
+            return None, 0.0, "لا يوجد وصف لهذه الشخصية لتوليد صورة حقيقية منه"
         try:
             os.makedirs(cache_dir, exist_ok=True)
             prompt = f"photorealistic portrait photo of {character.appearance}" + PORTRAIT_STYLE_SUFFIX
@@ -313,7 +340,7 @@ class DialoguePipeline:
                 f.write(image_bytes)
             return cache_path, PRICE_PER_MEGAPIXEL_USD, None
         except Exception as exc:
-            return character.reference_image_path, 0.0, str(exc)
+            return None, 0.0, str(exc)
 
     def _build_caption_group_image(self, photo_paths: list[str], slug: str) -> str:
         """Built once per screenplay (not per caption line) - a real
