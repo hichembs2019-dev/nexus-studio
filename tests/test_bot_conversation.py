@@ -638,6 +638,38 @@ def test_handle_message_build_screenplay_uses_previously_accumulated_text_too():
     assert "مرحبا" in reply.text
 
 
+def test_handle_message_never_auto_builds_a_screenplay_from_the_debounce_path():
+    # Real, live bug found 2026-10-21, directly from the owner's own
+    # confusion ("لم اعد افهمك... لم اعد افهم البوت"): in the real
+    # deployed bot, handle_message() is ONLY ever called with an empty
+    # text from the debounce timer - runner.py's _text handler never
+    # calls it with real text directly. If "build_screenplay" could fire
+    # from that empty-text (pulled_from_pending) path, the router would
+    # silently auto-build and CONSUME the owner's pending story text
+    # about 1.5s after he went quiet - racing his own following /full or
+    # /new command, which would then find nothing left to build from.
+    # This proves the debounce path never auto-builds, and the real
+    # story text is preserved (not lost) for the owner's own explicit
+    # /full right after.
+    router_build = _router_reply("build_screenplay", reply="يبدو جاهزًا للبناء.")
+    cast = _cast_reply(("فوزية", "female"))
+    lines = _lines_reply(("فوزية", "مرحبا", "smiling"))
+    conversation, _ = _conversation([router_build, cast, lines])
+    conversation.handle_plain_text("chat1", 'فوزية قالت: «مرحبا»')
+
+    reply = conversation.handle_message("chat1", "")  # debounce-driven call
+
+    assert "/full" in reply.text
+    assert "/new" in reply.text
+    # No screenplay was built - handle_approve still has nothing to approve.
+    approve_reply, screenplay = conversation.handle_approve("chat1")
+    assert screenplay is None
+    # The real story text must have survived, ready for /full right now -
+    # not silently consumed by the auto-build attempt above.
+    full_reply = conversation.handle_full("chat1", "")
+    assert "مرحبا" in full_reply.text
+
+
 def test_handle_message_edit_lines_applies_the_owners_exact_quoted_words():
     cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "مرحبا", "smiling"))

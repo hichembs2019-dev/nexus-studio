@@ -206,6 +206,37 @@ class BotConversation:
             return BotReply(text=routed.reply)
 
         if routed.intent == "build_screenplay":
+            # Real, live bug found 2026-10-21, directly from the owner's
+            # own confusion ("لم اعد افهمك... لم اعد افهم البوت"): in the
+            # real deployed system, handle_message() is ONLY ever called
+            # from runner.py's debounce path with an empty text - _text
+            # never calls it directly, only accumulates and (re)starts the
+            # debounce timer. That means pulled_from_pending is ALWAYS
+            # true in production, and a story that looks "ready to build"
+            # to the router (even without the owner asking for it yet)
+            # would silently auto-build and CONSUME pending_text roughly
+            # 1.5s after the owner went quiet - racing the owner's own
+            # following /full or /new command. If that command landed
+            # after the auto-build already fired, it found nothing left
+            # to build from ("الاستخدام: ...") even though the owner had
+            # JUST sent a real story - exactly what was observed live,
+            # repeatedly, and is indistinguishable from a bug to anyone
+            # watching it happen.
+            #
+            # Fixed by removing the race outright: a debounce-driven call
+            # never auto-builds. The owner's own explicit /full or /new -
+            # or a genuinely real-time, non-empty message (e.g. a direct
+            # caller, never the live bot) - are the only paths that still
+            # build a screenplay. The accumulated text is restored, never
+            # lost, so /full or /new immediately after still works.
+            if pulled_from_pending:
+                state.pending_text = text
+                return BotReply(
+                    text=(
+                        f"{routed.reply}\n\n"
+                        "لبناء السيناريو فعليًا، أرسل /full (لاستخدام كل كلمة حرفيًا) أو /new (لتلخيص تلقائي) الآن."
+                    )
+                )
             premise = f"{state.pending_text}\n{text}".strip() if state.pending_text else text
             if not premise:
                 return BotReply(text=routed.reply)
