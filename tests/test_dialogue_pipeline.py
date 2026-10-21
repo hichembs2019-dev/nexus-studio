@@ -217,6 +217,34 @@ def test_produce_single_line_calls_tts_then_fal_with_data_uris_and_saves_the_cli
     assert produced.clips[0].cost_usd == pytest.approx(1.0 * REAL_BILLED_PRICE_PER_SECOND_USD)
 
 
+def test_produce_uses_the_real_price_per_second_explicitly_passed_in(tmp_path):
+    # Real gap found by code review, 2026-10-21: DialoguePipeline used to
+    # import and hard-code fal.ai's own REAL_BILLED_PRICE_PER_SECOND_USD
+    # directly, so swapping in a different real provider (Replicate,
+    # added the same night) would silently compute real cost at the
+    # WRONG rate - exactly the "estimate doesn't match the real provider"
+    # defect this project spent the whole evening fixing for fal.ai
+    # itself. price_per_second_usd must now be honored explicitly,
+    # distinct from both fal.ai's 0.10 and 0.20 constants so this can't
+    # pass by coincidence.
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    tts = MockTTSClient()
+    pipeline = DialoguePipeline(
+        fal_video, tts, str(tmp_path), image_client=MockImageClient(), price_per_second_usd=0.05
+    )
+    screenplay = DialogueScreenplay(
+        title="T", premise="p",
+        characters=[Character(name="A", appearance="a")],
+        lines=[DialogueLine(index=0, character="A", line="one", action="a1")],
+    )
+
+    produced = pipeline.produce(screenplay)
+
+    assert produced.clips[0].cost_usd == pytest.approx(1.0 * 0.05)
+
+
 def test_produce_falls_back_to_a_default_prompt_when_action_is_empty(tmp_path):
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
 

@@ -10,8 +10,9 @@ from .agents.dialogue_writer import DialogueWriterAgent
 from .agents.publisher import PublishingAgent
 from .bot.conversation import BotConversation
 from .config import Settings
-from .integrations.fal_video_client import FalVideoClient, MockFalVideoClient, RealFalVideoClient
+from .integrations.fal_video_client import REAL_BILLED_PRICE_PER_SECOND_USD, FalVideoClient, MockFalVideoClient, RealFalVideoClient
 from .integrations.image_client import MockImageClient, RealFalImageClient
+from .integrations.replicate_video_client import PROVISIONAL_PRICE_PER_SECOND_USD, RealReplicateVideoClient
 from .integrations.publishing_client import MockPublishingClient, PublishingClient, RealYouTubeClient
 from .integrations.reasoning_client import (
     AgentReasoningClient,
@@ -82,11 +83,42 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
     # audio each clip lip-syncs to) - a silent "dialogue" line defeats
     # the entire point, so this stays None rather than falling back to
     # a silent/mock pipeline.
+    # Owner's instruction, 2026-10-21 ("الان اريد البوت بربليكات" -
+    # connect the bot to Replicate now), after a real, owner-run test
+    # confirmed Replicate's billing page matches its quoted price
+    # exactly (unlike fal.ai's own real invoice - see docs/SOURCES.md).
+    # VIDEO_PROVIDER explicitly picks "fal" or "replicate"; left unset,
+    # Replicate wins when configured (the provider he asked to move to),
+    # falling back to fal.ai so an existing deployment with only FAL_KEY
+    # set keeps working unchanged.
+    chosen_video_provider: str | None
+    if settings.video_provider == "replicate":
+        chosen_video_provider = "replicate" if settings.replicate_configured else None
+    elif settings.video_provider == "fal":
+        chosen_video_provider = "fal" if settings.fal_configured else None
+    elif settings.replicate_configured:
+        chosen_video_provider = "replicate"
+    elif settings.fal_configured:
+        chosen_video_provider = "fal"
+    else:
+        chosen_video_provider = None
+
     fal_video: FalVideoClient | None
     dialogue_writer: DialogueWriterAgent | None
     dialogue_pipeline: DialoguePipeline | None
-    if not force_mocks and settings.fal_configured and settings.azure_speech_configured:
-        fal_video = RealFalVideoClient(settings.fal_key)
+    # Declared here (not only inside the branch below) so BotConversation's
+    # own pre-Approve estimate always has a real rate to use, even on a
+    # mock/unconfigured build where no real pipeline exists at all.
+    price_per_second_usd: float = REAL_BILLED_PRICE_PER_SECOND_USD
+    if not force_mocks and chosen_video_provider is not None and settings.azure_speech_configured:
+        if chosen_video_provider == "replicate":
+            fal_video = RealReplicateVideoClient(settings.replicate_api_token)
+            price_per_second_usd = PROVISIONAL_PRICE_PER_SECOND_USD
+            logger.info("Real video provider: Replicate (wan-video/wan-2.2-s2v)")
+        else:
+            fal_video = RealFalVideoClient(settings.fal_key)
+            price_per_second_usd = REAL_BILLED_PRICE_PER_SECOND_USD
+            logger.info("Real video provider: fal.ai (fal-ai/wan/v2.2-14b/speech-to-video)")
         dialogue_writer = DialogueWriterAgent(reasoning)
         dialogue_pipeline = DialoguePipeline(
             fal_video, tts, settings.output_dir,
@@ -94,9 +126,11 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
             max_cost_usd=settings.max_episode_cost_usd,
             # Owner's instruction, 2026-10-20: a real, story-specific
             # photo per character (not a fixed panel of six reused
-            # forever) - same FAL_KEY, a second real endpoint
-            # (fal-ai/flux/dev, see image_client.py).
-            image_client=RealFalImageClient(settings.fal_key),
+            # forever) - fal-ai/flux/dev (see image_client.py), a
+            # separate real endpoint from video generation, unaffected
+            # by which video provider is chosen above.
+            image_client=RealFalImageClient(settings.fal_key) if settings.fal_configured else None,
+            price_per_second_usd=price_per_second_usd,
         )
     elif force_mocks:
         fal_video = MockFalVideoClient()
@@ -107,7 +141,10 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
             image_client=MockImageClient(),
         )
     else:
-        logger.warning("FAL_KEY and/or AZURE_SPEECH_KEY not set - real dialogue/lip-sync pipeline unavailable")
+        logger.warning(
+            "No real video provider configured (FAL_KEY/REPLICATE_API_TOKEN) and/or AZURE_SPEECH_KEY not set - "
+            "real dialogue/lip-sync pipeline unavailable"
+        )
         fal_video = None
         dialogue_writer = None
         dialogue_pipeline = None
@@ -125,7 +162,11 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
         if force_mocks:
             publishing_clients["youtube"] = MockPublishingClient()
     publisher = PublishingAgent(publishing_clients)
-    conversation = BotConversation(dialogue_writer, publisher) if dialogue_writer is not None else None
+    conversation = (
+        BotConversation(dialogue_writer, publisher, price_per_second_usd=price_per_second_usd)
+        if dialogue_writer is not None
+        else None
+    )
 
     return App(
         settings=settings,

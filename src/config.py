@@ -22,6 +22,19 @@ class Settings:
     azure_speech_region: str
     azure_tts_lang: str
     fal_key: str
+    # Owner's instruction, 2026-10-21 ("الان اريد البوت بربليكات" - connect
+    # the bot to Replicate now), after a real, owner-run test on
+    # Replicate confirmed its billing page matches its quoted price
+    # exactly (unlike fal.ai's own real invoice, see docs/SOURCES.md):
+    # a second real video provider, wired in alongside fal.ai rather
+    # than replacing it outright, so either can be selected without a
+    # code change.
+    replicate_api_token: str
+    # Explicit override: "fal" or "replicate". Empty string means
+    # auto-select (see build_app() in app.py) - prefers Replicate when
+    # it is configured, since that is the provider the owner asked to
+    # move to; falls back to fal.ai otherwise.
+    video_provider: str
     output_dir: str
     # Owner's instruction, 2026-10-20 ("قلت لك ضع له كود يشتغل و يسحب
     # المال الا عند صنع فيديو" - I told you to put code in that only
@@ -59,6 +72,10 @@ class Settings:
     def fal_configured(self) -> bool:
         return bool(self.fal_key)
 
+    @property
+    def replicate_configured(self) -> bool:
+        return bool(self.replicate_api_token)
+
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
@@ -78,6 +95,8 @@ class Settings:
             # DialoguePipeline path actually uses (see character_photos.py).
             azure_tts_lang=os.environ.get("AZURE_TTS_LANG", "ar-SY"),
             fal_key=os.environ.get("FAL_KEY", ""),
+            replicate_api_token=os.environ.get("REPLICATE_API_TOKEN", ""),
+            video_provider=os.environ.get("VIDEO_PROVIDER", ""),
             output_dir=os.environ.get("OUTPUT_DIR", "./output"),
             max_episode_cost_usd=float(os.environ.get("MAX_EPISODE_COST_USD", "10.0")),
         )

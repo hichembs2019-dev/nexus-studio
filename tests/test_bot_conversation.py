@@ -41,6 +41,31 @@ def test_new_with_explicit_seconds_writes_a_screenplay_sized_to_them():
     assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
 
 
+def test_new_cost_estimate_uses_the_real_price_per_second_explicitly_passed_in():
+    # Real gap found by code review, 2026-10-21: BotConversation used to
+    # import and hard-code fal.ai's own REAL_BILLED_PRICE_PER_SECOND_USD
+    # directly in _format_screenplay, so the pre-Approve estimate would
+    # silently stay at fal.ai's rate even when the actual pipeline is
+    # wired to a different real provider (Replicate, added the same
+    # night) - exactly the "estimate doesn't match the real provider"
+    # defect this project spent the whole evening fixing for fal.ai
+    # itself. 0.05 is distinct from both fal.ai's 0.10 and 0.20
+    # constants so this can't pass by coincidence.
+    cast = _cast_reply(("فوزية", "female"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast, lines])
+    conversation = BotConversation(
+        DialogueWriterAgent(reasoning), PublishingAgent({}), price_per_second_usd=0.05
+    )
+
+    reply = conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
+
+    from src.integrations.image_client import PRICE_PER_MEGAPIXEL_USD
+
+    expected_cost = 2 * ESTIMATED_SECONDS_PER_LINE * 0.05 + 1 * PRICE_PER_MEGAPIXEL_USD
+    assert f"${expected_cost:.2f}" in reply.text
+
+
 def test_new_cost_estimate_includes_real_portrait_generation_cost():
     # Real bug found by code review, 2026-10-21: the estimate shown
     # before Approve only ever counted spoken-line video cost - never

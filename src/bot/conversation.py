@@ -132,9 +132,26 @@ class _ChatState:
 
 
 class BotConversation:
-    def __init__(self, dialogue_writer: DialogueWriterAgent, publisher: PublishingAgent):
+    def __init__(
+        self,
+        dialogue_writer: DialogueWriterAgent,
+        publisher: PublishingAgent,
+        # Real finding, 2026-10-21: this used to import and hard-code
+        # fal.ai's own REAL_BILLED_PRICE_PER_SECOND_USD directly in
+        # _format_screenplay below - silently showing the owner a cost
+        # estimate computed at fal.ai's real rate even on a build wired
+        # to a different real provider (Replicate, added the same
+        # night), exactly the "estimate doesn't match the real provider"
+        # defect this project spent the whole evening fixing for fal.ai
+        # itself. The real rate for whichever provider is actually
+        # wired in (src/app.py, same value passed to DialoguePipeline's
+        # own price_per_second_usd) must be passed explicitly - never
+        # assumed here.
+        price_per_second_usd: float = REAL_BILLED_PRICE_PER_SECOND_USD,
+    ):
         self._dialogue_writer = dialogue_writer
         self._publisher = publisher
+        self._price_per_second_usd = price_per_second_usd
         self._states: dict[str, _ChatState] = {}
 
     def handle_plain_text(self, chat_id: str, text: str) -> None:
@@ -599,8 +616,7 @@ class BotConversation:
             return BotReply(text=f"✅ نُشر على قناة Nexora: https://youtu.be/{result.video_id}")
         return BotReply(text=f"✅ نُشر على {platform}: {result.video_id}")
 
-    @staticmethod
-    def _format_screenplay(screenplay: DialogueScreenplay) -> str:
+    def _format_screenplay(self, screenplay: DialogueScreenplay) -> str:
         lines = [f"📝 {screenplay.title}", "", "الشخصيات:"]
         for c in screenplay.characters:
             lines.append(f"- {c.name}")
@@ -622,15 +638,11 @@ class BotConversation:
         # moment that matters most for a cost this owner has been burned
         # by before - silently understated the real total every time.
         appearing_character_count = len({l.character for l in screenplay.lines})
-        # Real invoice evidence, 2026-10-21 (see
-        # fal_video_client.py's REAL_BILLED_PRICE_PER_SECOND_USD and
-        # docs/SOURCES.md): the owner's own fal.ai bill showed every real
-        # call ever made by this project billed at the 720p rate, despite
-        # every request asking for the cheaper 480p rate - the estimate
-        # shown here before every Approve must reflect what he is really
-        # charged, not what the API's own pricing table promises.
+        # Uses self._price_per_second_usd - the real rate for whichever
+        # provider is actually wired in (src/app.py), never a hard-coded
+        # fal.ai-specific constant. See __init__'s own comment above.
         est_cost = (
-            spoken_count * ESTIMATED_SECONDS_PER_LINE * REAL_BILLED_PRICE_PER_SECOND_USD
+            spoken_count * ESTIMATED_SECONDS_PER_LINE * self._price_per_second_usd
             + appearing_character_count * PRICE_PER_MEGAPIXEL_USD
         )
         lines.append(f"(تكلفة تقديرية تقريبية: ${est_cost:.2f} - التكلفة الحقيقية تُحسب بعد التوليد الفعلي)")

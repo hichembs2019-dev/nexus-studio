@@ -139,12 +139,25 @@ class DialoguePipeline:
         resolution: str = "480p",
         max_cost_usd: float | None = None,
         image_client: ImageClient | None = None,
+        # Real finding, 2026-10-21 ("و لماذا تتسرب الأسعار ... ألم تقل لك
+        # من قبل؟"): this used to import and hard-code fal.ai's own
+        # REAL_BILLED_PRICE_PER_SECOND_USD directly, which silently
+        # computed every real cost (the pre-Approve estimate AND the real
+        # MAX_EPISODE_COST_USD spend ceiling) at fal.ai's rate even if
+        # `fal_video` above were ever swapped for a different real
+        # provider (Replicate, added the same night) - exactly the "wrong
+        # rate used without anyone noticing" defect this project spent
+        # the whole evening fixing for fal.ai itself. The real rate for
+        # whichever client is actually wired in must now be passed
+        # explicitly by the caller (src/app.py) - never assumed here.
+        price_per_second_usd: float = REAL_BILLED_PRICE_PER_SECOND_USD,
     ):
         self._fal_video = fal_video
         self._tts = tts
         self._output_dir = output_dir
         self._tts_lang = tts_lang
         self._resolution = resolution
+        self._price_per_second_usd = price_per_second_usd
         # Owner's standing instruction, 2026-10-21 ("احذف الستة صور و قلت
         # التوليد حسب القصة"): None here means production simply cannot
         # generate any real photo at all - every speaking character's
@@ -333,20 +346,19 @@ class DialoguePipeline:
                 # itself fails.
                 try:
                     duration = _ffprobe_duration(clip_path)
-                    # Real invoice evidence, 2026-10-21 (see
-                    # fal_video_client.py's REAL_BILLED_PRICE_PER_SECOND_USD
-                    # and docs/SOURCES.md): fal.ai has billed every real
-                    # call this project ever made at the 720p rate despite
-                    # every request asking for 480p, so real cost tracking
-                    # uses the rate fal.ai actually charges, not the rate
-                    # requested.
-                    cost = duration * REAL_BILLED_PRICE_PER_SECOND_USD
+                    # Real cost tracking uses self._price_per_second_usd -
+                    # the real rate for whichever provider is ACTUALLY
+                    # wired into self._fal_video, passed explicitly by the
+                    # caller (src/app.py). See this class's own __init__
+                    # docstring comment for why this is never a hard-coded
+                    # import any more.
+                    cost = duration * self._price_per_second_usd
                     clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
                     spent_so_far += cost
                 except Exception as probe_exc:
                     try:
                         duration = _ffprobe_duration(audio_path)
-                        cost = duration * REAL_BILLED_PRICE_PER_SECOND_USD
+                        cost = duration * self._price_per_second_usd
                         clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
                         spent_so_far += cost
                     except Exception:
