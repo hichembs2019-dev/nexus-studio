@@ -165,44 +165,55 @@ class BotConversation:
         # several separate text updates (see the 2026-10-19 finding
         # above) - runner.py debounces these into one real call here,
         # arriving with an EMPTY text once the owner has gone quiet, so
-        # this pulls the full coalesced text out of pending_text itself
+        # this reads the full coalesced text out of pending_text itself
         # rather than routing a mid-sentence fragment through the LLM.
         # A caller passing a real, non-empty message (e.g. a direct unit
         # test) is unaffected - this path only ever triggers when there
         # is nothing new to add on top of what is already accumulated.
+        #
+        # Real, live race found 2026-10-21, the SECOND time this file was
+        # fixed for pending_text loss that same evening: the first fix
+        # (see git history) pulled pending_text into `text` and cleared
+        # it to "" immediately, intending to restore it in every branch
+        # that does not consume it. That still left a real window open -
+        # route_message() below is a genuine, slow, synchronous network
+        # call (now run via loop.run_in_executor from runner.py, exactly
+        # so it does not freeze the whole bot - see that file's own
+        # history) - and anything else touching state.pending_text
+        # DURING that window (most concretely: the owner's own very next
+        # /full or /new, now also running on its own executor thread)
+        # could observe it already cleared, before this function ever got
+        # back around to restoring it. The owner hit this directly and
+        # repeatedly: send the story, then /full immediately after -
+        # "nothing to build" every time, even though the story had just
+        # been sent.
+        #
+        # Fixed by never speculatively clearing state.pending_text at
+        # all. It is only ever read here, and only ever mutated at the
+        # ONE real point something actually consumes it (a successful
+        # screenplay build, below) - so there is no window, of any
+        # length, where a concurrent read of it sees anything but its
+        # real, true content.
         pulled_from_pending = not text
-        if pulled_from_pending:
-            text = state.pending_text
-            state.pending_text = ""
-        if not text:
+        source_text = state.pending_text if pulled_from_pending else text
+        if not source_text:
             return BotReply(text="")
 
-        # Real bug found by code review, 2026-10-21, right after the
-        # feature's first real use: pending_text was cleared above
-        # unconditionally, but only ever restored by the "accumulate" and
-        # "build_screenplay" branches below - a real "discuss"/"edit_lines"/
-        # "set_captions" classification (a genuine router outcome, not a
-        # hypothetical one - this already happened live once) silently
-        # DISCARDED the owner's real accumulated story text forever, the
-        # exact opposite of the owner's own standing rule ("يجب ان ينفذ كل
-        # حرف و كل كلمة كتبتها بدون حذف او نقصان" - every letter and word
-        # must be used, nothing dropped). Every branch that does not
-        # itself consume the pulled text into something real now restores
-        # it first.
         try:
-            routed = self._dialogue_writer.route_message(state.screenplay, state.pending_text, text)
+            routed = self._dialogue_writer.route_message(
+                state.screenplay, "" if pulled_from_pending else state.pending_text, source_text
+            )
         except DialogueWriterError as exc:
-            if pulled_from_pending:
-                state.pending_text = text
             return BotReply(text=f"تعذّر فهم رسالتك: {exc}")
 
         if routed.intent == "accumulate":
-            self.handle_plain_text(chat_id, text)
+            if not pulled_from_pending:
+                self.handle_plain_text(chat_id, source_text)
+            # Already pulled straight from pending_text itself above - it
+            # already holds exactly this content, nothing to add.
             return BotReply(text=routed.reply)
 
         if routed.intent == "discuss":
-            if pulled_from_pending:
-                state.pending_text = text
             return BotReply(text=routed.reply)
 
         if routed.intent == "build_screenplay":
@@ -227,17 +238,17 @@ class BotConversation:
             # never auto-builds. The owner's own explicit /full or /new -
             # or a genuinely real-time, non-empty message (e.g. a direct
             # caller, never the live bot) - are the only paths that still
-            # build a screenplay. The accumulated text is restored, never
-            # lost, so /full or /new immediately after still works.
+            # build a screenplay. pending_text was never touched above, so
+            # it is already exactly as it was - /full or /new right after
+            # this reply sees the real, complete text, every time.
             if pulled_from_pending:
-                state.pending_text = text
                 return BotReply(
                     text=(
                         f"{routed.reply}\n\n"
                         "لبناء السيناريو فعليًا، أرسل /full (لاستخدام كل كلمة حرفيًا) أو /new (لتلخيص تلقائي) الآن."
                     )
                 )
-            premise = f"{state.pending_text}\n{text}".strip() if state.pending_text else text
+            premise = f"{state.pending_text}\n{source_text}".strip() if state.pending_text else source_text
             if not premise:
                 return BotReply(text=routed.reply)
             try:
@@ -271,8 +282,6 @@ class BotConversation:
             # route_message() already refuses this intent when no draft
             # exists (a real code-level gate, not just a prompt rule) -
             # this mirrors handle_edit's own guard only as defense in depth.
-            if pulled_from_pending:
-                state.pending_text = text
             if state.screenplay is None:
                 return BotReply(text="لا توجد مسودة سيناريو بعد - صف لي القصة أولًا.")
             not_found = self._apply_edits(state.screenplay, routed.edits)
@@ -282,8 +291,6 @@ class BotConversation:
             return BotReply(text=reply_text, buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
 
         if routed.intent == "set_captions":
-            if pulled_from_pending:
-                state.pending_text = text
             if state.screenplay is None:
                 return BotReply(text="لا توجد مسودة سيناريو بعد - صف لي القصة أولًا.")
             not_found = self._apply_captions(state.screenplay, routed.caption_lines)
@@ -294,10 +301,7 @@ class BotConversation:
 
         # Unreachable: route_message() validates intent is one of the
         # five handled above and raises DialogueWriterError otherwise.
-        # Still restores pending_text if reached - defense in depth, same
-        # reasoning as every branch above.
-        if pulled_from_pending:
-            state.pending_text = text
+        # pending_text was never touched above, so nothing to restore.
         return BotReply(text=routed.reply)
 
     def handle_new(self, chat_id: str, args_text: str) -> BotReply:
