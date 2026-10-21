@@ -155,7 +155,24 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         except asyncio.CancelledError:
             return
         _debounce_tasks.pop(chat_id, None)
-        reply = conversation.handle_message(chat_id, "")
+        # Real gap, caught live, 2026-10-21: this task is created directly
+        # with asyncio.create_task (same as _produce_and_notify below), NOT
+        # dispatched through python-telegram-bot's own Application - so
+        # add_error_handler's global catch (registered below, for the
+        # OTHER handlers) never sees an exception raised in here. Without
+        # this try/except, any non-DialogueWriterError failure inside
+        # handle_message() (a real network error from the reasoning
+        # client, for instance - RealGroqReasoningClient/
+        # RealGeminiReasoningClient both raise raw exceptions, never
+        # DialogueWriterError, on a real API/network failure) would die as
+        # an unretrieved Task exception - the exact "owner gets total
+        # silence" failure class _produce_and_notify was already fixed for
+        # on 2026-10-19, reachable again here through the new router.
+        try:
+            reply = conversation.handle_message(chat_id, "")
+        except Exception as exc:
+            await context.bot.send_message(chat_id=chat_id, text=f"⚠️ تعذّر فهم رسالتك بسبب خطأ تقني: {exc}")
+            return
         if reply.text:
             await _send_reply(chat_id, context, reply)
 
