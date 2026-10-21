@@ -95,7 +95,15 @@ class RealReplicateImageClient(ReplicateImageClient):
     def generate_image(self, prompt: str) -> bytes:
         import httpx
 
+        from .replicate_rate_limiter import shared_submit_pacer
+
         headers = {"Authorization": f"Bearer {self._api_token}", "Content-Type": "application/json"}
+        # Real incident, 2026-10-21: see replicate_rate_limiter.py's own
+        # docstring - paces this submission against every other real
+        # Replicate submission (video included) so the app never sends
+        # requests faster than Replicate's own documented worst-case
+        # restrictive tier in the first place.
+        shared_submit_pacer.wait_for_slot()
         submit = _post_with_retry(headers, {"input": {"prompt": prompt}})
         if submit.status_code >= 400:
             raise ReplicateImageError(f"Replicate image submit failed ({submit.status_code}): {submit.text[:500]}")

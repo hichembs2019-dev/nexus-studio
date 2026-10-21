@@ -127,7 +127,15 @@ class RealReplicateVideoClient(ReplicateVideoClient):
     ) -> bytes:
         import httpx
 
+        from .replicate_rate_limiter import shared_submit_pacer
+
         headers = {"Authorization": f"Bearer {self._api_token}", "Content-Type": "application/json"}
+        # Real incident, 2026-10-21: see replicate_rate_limiter.py's own
+        # docstring - paces this submission against every other real
+        # Replicate submission (image portraits included) so the app
+        # never sends requests faster than Replicate's own documented
+        # worst-case restrictive tier in the first place.
+        shared_submit_pacer.wait_for_slot()
         submit = _post_with_retry(
             headers, {"input": {"prompt": prompt, "image": image_data_uri, "audio": audio_data_uri}}
         )

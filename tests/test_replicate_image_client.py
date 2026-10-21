@@ -185,6 +185,38 @@ def test_generate_image_gives_up_after_max_retries_on_persistent_429s(monkeypatc
     assert len(post_calls) == 5  # MAX_SUBMIT_RETRIES - never retries forever on a genuinely broke account
 
 
+def test_generate_image_paces_itself_through_the_shared_submit_pacer(monkeypatch):
+    # Real incident, 2026-10-21: real portrait generations failed with a
+    # real 429 from Replicate's documented low-credit/no-payment-method
+    # throttle (6/min, burst of 1) even on an account with real paid
+    # credit above $5 - see replicate_rate_limiter.py's own docstring.
+    # Every real submission must go through the shared pacer BEFORE being
+    # sent, not just react to a 429 after the fact.
+    from src.integrations.replicate_rate_limiter import shared_submit_pacer
+
+    calls = []
+    monkeypatch.setattr(shared_submit_pacer, "wait_for_slot", lambda: calls.append(1))
+
+    def fake_post(url, *, headers, json, timeout):
+        return _FakeResponse(status_code=201, json_data={"id": "p", "urls": {"get": "https://api.replicate.com/v1/predictions/p"}})
+
+    def fake_get(url, *, headers=None, timeout=30):
+        if url.endswith("/p"):
+            return _FakeResponse(status_code=200, json_data={"status": "succeeded", "output": "https://real.cdn/portrait.jpg"})
+        return _FakeResponse(status_code=200, content=b"bytes")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    client = RealReplicateImageClient("key")
+    client.generate_image("p")
+
+    assert calls == [1]
+
+
 def test_mock_replicate_image_client_records_calls_and_returns_scripted_bytes():
     mock = MockReplicateImageClient(scripted_bytes=b"scripted-portrait")
 

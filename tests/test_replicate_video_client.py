@@ -237,6 +237,35 @@ def test_generate_speech_to_video_gives_up_after_max_retries_on_persistent_429s(
     assert len(post_calls) == 5
 
 
+def test_generate_speech_to_video_paces_itself_through_the_shared_submit_pacer(monkeypatch):
+    # Real incident, 2026-10-21: see test_replicate_image_client.py's own
+    # mirrored test - the identical real throttle applies to this
+    # endpoint, same account, same real shared rate-limit bucket.
+    from src.integrations.replicate_rate_limiter import shared_submit_pacer
+
+    calls = []
+    monkeypatch.setattr(shared_submit_pacer, "wait_for_slot", lambda: calls.append(1))
+
+    def fake_post(url, *, headers, json, timeout):
+        return _FakeResponse(status_code=201, json_data={"id": "p", "urls": {"get": "https://api.replicate.com/v1/predictions/p"}})
+
+    def fake_get(url, *, headers=None, timeout=30):
+        if url.endswith("/p"):
+            return _FakeResponse(status_code=200, json_data={"status": "succeeded", "output": "https://real.cdn/clip.mp4"})
+        return _FakeResponse(status_code=200, content=b"bytes")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    client = RealReplicateVideoClient("key")
+    client.generate_speech_to_video(prompt="p", image_data_uri="i", audio_data_uri="a")
+
+    assert calls == [1]
+
+
 def test_mock_replicate_video_client_records_calls_and_returns_scripted_bytes():
     mock = MockReplicateVideoClient(scripted_bytes=b"scripted-clip")
 
