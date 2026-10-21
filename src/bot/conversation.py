@@ -170,15 +170,30 @@ class BotConversation:
         # A caller passing a real, non-empty message (e.g. a direct unit
         # test) is unaffected - this path only ever triggers when there
         # is nothing new to add on top of what is already accumulated.
-        if not text:
+        pulled_from_pending = not text
+        if pulled_from_pending:
             text = state.pending_text
             state.pending_text = ""
         if not text:
             return BotReply(text="")
 
+        # Real bug found by code review, 2026-10-21, right after the
+        # feature's first real use: pending_text was cleared above
+        # unconditionally, but only ever restored by the "accumulate" and
+        # "build_screenplay" branches below - a real "discuss"/"edit_lines"/
+        # "set_captions" classification (a genuine router outcome, not a
+        # hypothetical one - this already happened live once) silently
+        # DISCARDED the owner's real accumulated story text forever, the
+        # exact opposite of the owner's own standing rule ("يجب ان ينفذ كل
+        # حرف و كل كلمة كتبتها بدون حذف او نقصان" - every letter and word
+        # must be used, nothing dropped). Every branch that does not
+        # itself consume the pulled text into something real now restores
+        # it first.
         try:
             routed = self._dialogue_writer.route_message(state.screenplay, state.pending_text, text)
         except DialogueWriterError as exc:
+            if pulled_from_pending:
+                state.pending_text = text
             return BotReply(text=f"تعذّر فهم رسالتك: {exc}")
 
         if routed.intent == "accumulate":
@@ -186,6 +201,8 @@ class BotConversation:
             return BotReply(text=routed.reply)
 
         if routed.intent == "discuss":
+            if pulled_from_pending:
+                state.pending_text = text
             return BotReply(text=routed.reply)
 
         if routed.intent == "build_screenplay":
@@ -223,6 +240,8 @@ class BotConversation:
             # route_message() already refuses this intent when no draft
             # exists (a real code-level gate, not just a prompt rule) -
             # this mirrors handle_edit's own guard only as defense in depth.
+            if pulled_from_pending:
+                state.pending_text = text
             if state.screenplay is None:
                 return BotReply(text="لا توجد مسودة سيناريو بعد - صف لي القصة أولًا.")
             not_found = self._apply_edits(state.screenplay, routed.edits)
@@ -232,6 +251,8 @@ class BotConversation:
             return BotReply(text=reply_text, buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
 
         if routed.intent == "set_captions":
+            if pulled_from_pending:
+                state.pending_text = text
             if state.screenplay is None:
                 return BotReply(text="لا توجد مسودة سيناريو بعد - صف لي القصة أولًا.")
             not_found = self._apply_captions(state.screenplay, routed.caption_lines)
@@ -242,6 +263,10 @@ class BotConversation:
 
         # Unreachable: route_message() validates intent is one of the
         # five handled above and raises DialogueWriterError otherwise.
+        # Still restores pending_text if reached - defense in depth, same
+        # reasoning as every branch above.
+        if pulled_from_pending:
+            state.pending_text = text
         return BotReply(text=routed.reply)
 
     def handle_new(self, chat_id: str, args_text: str) -> BotReply:

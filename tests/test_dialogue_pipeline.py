@@ -588,6 +588,45 @@ def test_produce_reports_a_real_caption_rendering_failure_without_a_billed_prefi
     assert "simulated real caption render failure" in produced.failed_lines[0][1]
 
 
+@pytest.mark.skipif(not _ARABIC_FONT_AVAILABLE, reason="fonts-noto-core not installed on this machine - Dockerfile installs it for the real deployment")
+def test_produce_does_not_reuse_a_stale_caption_group_photo_after_the_caption_roster_changes(tmp_path):
+    # Real bug found by code review, 2026-10-21: the caption group photo
+    # cache used to be keyed only by the screenplay's own title-derived
+    # slug - a retry of the SAME screenplay (same title, same slug - the
+    # exact reason per-character photos are deliberately cached this way,
+    # see _resolve_character_photo's own docstring) after an /edit or
+    # /caption that changed WHICH characters are captioned would silently
+    # reuse the group photo built for the FIRST, now-stale, roster - the
+    # wrong faces shown in every caption frame, with no error anywhere.
+    portrait_a = _real_jpeg_bytes(str(tmp_path / "a.jpg"))
+    pipeline_a = DialoguePipeline(
+        MockFalVideoClient(), MockTTSClient(), str(tmp_path), image_client=MockImageClient(scripted_bytes=portrait_a)
+    )
+    screenplay_a = DialogueScreenplay(
+        title="Same Title", premise="p",
+        characters=[Character(name="A", appearance="a")],
+        lines=[DialogueLine(index=0, character="A", line="نص أ", action="", spoken=False)],
+    )
+    pipeline_a.produce(screenplay_a)
+
+    portrait_b = _real_jpeg_bytes(str(tmp_path / "b.jpg"))
+    pipeline_b = DialoguePipeline(
+        MockFalVideoClient(), MockTTSClient(), str(tmp_path), image_client=MockImageClient(scripted_bytes=portrait_b)
+    )
+    screenplay_b = DialogueScreenplay(
+        title="Same Title", premise="p",  # same title -> same slug, like a real retry after /edit
+        characters=[Character(name="B", appearance="b")],
+        lines=[DialogueLine(index=0, character="B", line="نص ب", action="", spoken=False)],
+    )
+    pipeline_b.produce(screenplay_b)
+
+    group_images = [f for f in os.listdir(str(tmp_path)) if "_caption_group" in f]
+    # Two genuinely different caption rosters under the same screenplay
+    # title must produce two distinct group photo files - never one
+    # shared (and therefore wrong) file.
+    assert len(group_images) == 2
+
+
 def test_produce_rejects_a_line_whose_speaker_is_not_in_the_cast(tmp_path):
     pipeline = DialoguePipeline(MockFalVideoClient(), MockTTSClient(), str(tmp_path))
     screenplay = DialogueScreenplay(

@@ -704,3 +704,67 @@ def test_handle_message_with_empty_text_and_nothing_pending_does_nothing():
     reply = conversation.handle_message("chat1", "")
 
     assert reply.text == ""
+
+
+# Real incident, 2026-10-21, found live the first time the feature was
+# actually used: pending_text was cleared unconditionally once pulled by
+# the debounce path, but only ever restored by the "accumulate" and
+# "build_screenplay" branches - "discuss"/"edit_lines"/"set_captions"
+# silently discarded the owner's real accumulated story text forever.
+# Each test below proves the text SURVIVES (a second debounce-pulled call
+# still has real text to route, rather than returning empty immediately)
+# and is not duplicated (the router sees it exactly once per call).
+
+
+def test_handle_message_discuss_preserves_pending_text_pulled_from_debounce():
+    router_discuss = _router_reply("discuss", reply="سؤال جيد.")
+    router_accumulate = _router_reply("accumulate", reply="تم.")
+    reasoning = MockAgentReasoningClient(scripted_replies=[router_discuss, router_accumulate])
+    conversation = BotConversation(DialogueWriterAgent(reasoning), PublishingAgent({}))
+    conversation.handle_plain_text("chat1", "جزء من قصة حقيقية لم تتحول لسيناريو بعد")
+
+    first = conversation.handle_message("chat1", "")
+    assert first.text == "سؤال جيد."
+
+    second = conversation.handle_message("chat1", "")
+    assert second.text == "تم."
+    assert reasoning.calls[0][1].count("جزء من قصة حقيقية لم تتحول لسيناريو بعد") == 1
+    assert reasoning.calls[1][1].count("جزء من قصة حقيقية لم تتحول لسيناريو بعد") == 1
+
+
+def test_handle_message_edit_lines_preserves_unrelated_pending_text_pulled_from_debounce():
+    cast = _cast_reply(("فوزية", "female"))
+    lines = _lines_reply(("فوزية", "مرحبا", "smiling"))
+    router_build = _router_reply("build_screenplay", reply="بُني.")
+    router_edit = _router_reply("edit_lines", reply="عدّلت.", edits=[{"line": 1, "text": "لن أسامحك"}])
+    router_accumulate = _router_reply("accumulate", reply="تم.")
+    reasoning = MockAgentReasoningClient(scripted_replies=[router_build, cast, lines, router_edit, router_accumulate])
+    conversation = BotConversation(DialogueWriterAgent(reasoning), PublishingAgent({}))
+
+    conversation.handle_message("chat1", 'فوزية قالت: «مرحبا»')
+    conversation.handle_plain_text("chat1", "مادة قصة أخرى منفصلة لم تُستخدم بعد")
+
+    edit_reply = conversation.handle_message("chat1", "")
+    assert "لن أسامحك" in edit_reply.text
+
+    again = conversation.handle_message("chat1", "")
+    assert again.text == "تم."
+
+
+def test_handle_message_set_captions_preserves_unrelated_pending_text_pulled_from_debounce():
+    cast = _cast_reply(("فوزية", "female"))
+    lines = _lines_reply(("فوزية", "مرحبا", "smiling"))
+    router_build = _router_reply("build_screenplay", reply="بُني.")
+    router_caption = _router_reply("set_captions", reply="حوّلت.", caption_lines=[1])
+    router_accumulate = _router_reply("accumulate", reply="تم.")
+    reasoning = MockAgentReasoningClient(scripted_replies=[router_build, cast, lines, router_caption, router_accumulate])
+    conversation = BotConversation(DialogueWriterAgent(reasoning), PublishingAgent({}))
+
+    conversation.handle_message("chat1", 'فوزية قالت: «مرحبا»')
+    conversation.handle_plain_text("chat1", "مادة قصة أخرى منفصلة لم تُستخدم بعد")
+
+    caption_reply = conversation.handle_message("chat1", "")
+    assert "نص على الشاشة" in caption_reply.text
+
+    again = conversation.handle_message("chat1", "")
+    assert again.text == "تم."

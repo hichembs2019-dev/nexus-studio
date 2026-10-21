@@ -214,10 +214,11 @@ class DialoguePipeline:
             {l.character for l in screenplay.lines if not l.spoken},
             key=lambda n: next(i for i, l in enumerate(screenplay.lines) if l.character == n),
         )
-        resolved_caption_photos = [resolved_photos[n] for n in caption_character_names if n in resolved_photos]
+        included_caption_names = [n for n in caption_character_names if n in resolved_photos]
+        resolved_caption_photos = [resolved_photos[n] for n in included_caption_names]
         caption_group_image: str | None = None
         if resolved_caption_photos:
-            caption_group_image = self._build_caption_group_image(resolved_caption_photos, slug)
+            caption_group_image = self._build_caption_group_image(resolved_caption_photos, slug, included_caption_names)
 
         for line in screenplay.lines:
             character = characters_by_name.get(line.character)
@@ -423,11 +424,25 @@ class DialoguePipeline:
         except Exception as exc:
             return None, 0.0, str(exc)
 
-    def _build_caption_group_image(self, photo_paths: list[str], slug: str) -> str:
+    def _build_caption_group_image(self, photo_paths: list[str], slug: str, character_names: list[str]) -> str:
         """Built once per screenplay (not per caption line) - a real
         ffmpeg hstack of every captioned character's own real portrait,
-        side by side. Pure local image work, zero real API cost."""
-        out_path = os.path.join(self._output_dir, f"{slug}_caption_group.jpg")
+        side by side. Pure local image work, zero real API cost.
+
+        Real bug found by code review, 2026-10-21: the cache path used to
+        be keyed only by `slug` (the screenplay's own title), with no
+        trace of WHICH characters were actually in the group photo. A
+        retry of the same screenplay (same title, same slug - the exact,
+        already-documented, deliberate reason character photos ARE cached
+        by slug) after an /edit or /caption that changed which characters
+        are captioned would silently reuse the OLD group image - the
+        wrong characters shown in every caption frame, with no error at
+        all. The cache key now includes every included character's own
+        name, the same `_slug()` the per-character photo cache already
+        uses, so a genuinely different caption roster can never collide
+        with a stale file."""
+        composition_key = "_".join(_slug(n, default="c") for n in character_names)
+        out_path = os.path.join(self._output_dir, f"{slug}_caption_group_{composition_key}.jpg")
         if os.path.isfile(out_path):
             return out_path
         if len(photo_paths) == 1:
