@@ -7,9 +7,17 @@ kept as small as possible.
 
 CommandHandler's constructor and context.args shape are verified from
 python-telegram-bot's own docs (2026-10-17). send_video/reply_video are
-not independently doc-verified beyond what nexus-studio's own
-telegram_client.py already notes (send_message/InlineKeyboardMarkup are
-reused from nexus-commerce's verified usage) - confirm on first live run.
+not independently doc-verified beyond send_message/InlineKeyboardMarkup,
+reused from nexus-commerce's verified usage - confirm on first live run.
+
+Owner's standing instruction, 2026-10-21 ("ما هو 101؟" - pointing at an
+earlier audit's line-count table - "و لا تصر على شيء لا اريده" - don't
+insist on something I don't want): this file used to also have a sibling,
+src/integrations/telegram_client.py - a TelegramClient interface/Real/Mock
+wrapper around python-telegram-bot, built early on but never actually
+wired in here (this file calls context.bot.* and python-telegram-bot's
+Application directly). 101 lines of genuinely unused code, confirmed by
+grep before deleting - removed outright, along with its own test file.
 
 DialoguePipeline.produce() is slow (minutes, real per-line TTS + fal.ai
 calls) and synchronous; running it directly inside an async handler
