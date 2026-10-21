@@ -18,7 +18,21 @@ Groq failure, same `fallback` pattern nexus-commerce already proved.
 """
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
+
+# Owner's question, caught live, 2026-10-21 ("و اين groq؟ اليس واحد منهم
+# احتياطي؟" - where is Groq, isn't one of them the backup?): a real
+# Gemini 500 reached him, and there was no way for either of us to tell
+# from the outside whether that was Gemini failing as the PRIMARY
+# (GROQ_API_KEY unset on the real server) or Gemini failing as the
+# FALLBACK after a real Groq failure (whose own reason - a quota hit,
+# a network error, anything) was previously discarded completely, not
+# even into the container's own logs. logger.warning below is the fix:
+# the real Groq failure reason now always reaches `docker compose logs`
+# before falling back, so a repeat of this question is answerable from a
+# real log line instead of from neither of us knowing.
+logger = logging.getLogger("nexus_studio.reasoning_client")
 
 
 class AgentReasoningClient(ABC):
@@ -65,9 +79,11 @@ class RealGroqReasoningClient(AgentReasoningClient):
                 # one, so it is treated the same way here.
                 raise RuntimeError("Groq completion failed: empty content in a successful response")
             return content
-        except Exception:
+        except Exception as exc:
             if self._fallback is not None:
+                logger.warning("Groq reasoning call failed, falling back to Gemini: %s", exc)
                 return self._fallback.complete(system_prompt, user_prompt)
+            logger.warning("Groq reasoning call failed, no fallback configured: %s", exc)
             raise
 
 

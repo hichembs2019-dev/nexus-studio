@@ -137,6 +137,51 @@ def test_groq_complete_with_no_fallback_still_raises_on_error(monkeypatch):
         client.complete("sys", "user")
 
 
+def test_groq_complete_logs_the_real_failure_reason_before_falling_back(monkeypatch, caplog):
+    # Owner's question, caught live, 2026-10-21 ("و اين groq؟ اليس واحد
+    # منهم احتياطي؟" - where is Groq, isn't one of them the backup?): a
+    # real Gemini failure reached him with no way for either of us to
+    # tell whether Groq had failed first, or why - the real Groq error
+    # used to be discarded completely, not even reaching the container's
+    # own logs. This proves the real reason is now logged before the
+    # fallback is ever called.
+    def fake_post(url, *, headers, json, timeout):
+        raise RuntimeError("Rate limit reached ... tokens per day (TPD): Limit 200000, Used 199974")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    class _FakeFallback:
+        def complete(self, system_prompt, user_prompt):
+            return '["from gemini fallback"]'
+
+    client = RealGroqReasoningClient(api_key="fake-key", model="openai/gpt-oss-120b", fallback=_FakeFallback())
+
+    with caplog.at_level("WARNING", logger="nexus_studio.reasoning_client"):
+        client.complete("sys", "user")
+
+    assert any("Rate limit reached" in record.message for record in caplog.records)
+    assert any("falling back to Gemini" in record.message for record in caplog.records)
+
+
+def test_groq_complete_logs_the_real_failure_reason_with_no_fallback_too(monkeypatch, caplog):
+    def fake_post(url, *, headers, json, timeout):
+        raise RuntimeError("boom")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    client = RealGroqReasoningClient(api_key="fake-key", model="openai/gpt-oss-120b")
+
+    with caplog.at_level("WARNING", logger="nexus_studio.reasoning_client"):
+        with pytest.raises(RuntimeError, match="boom"):
+            client.complete("sys", "user")
+
+    assert any("boom" in record.message for record in caplog.records)
+
+
 class _FakeGeminiResponse:
     def __init__(self, text: str):
         self.text = text
