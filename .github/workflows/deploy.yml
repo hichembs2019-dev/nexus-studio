@@ -87,25 +87,3 @@ jobs:
             else
               echo "MAX_EPISODE_COST_USD: not set in .env - config.py's own default (10.0) is in effect"
             fi
-            # TEMPORARY read-only diagnostic, 2026-10-21 - owner asked how
-            # to give Claude access to his real fal.ai account to settle
-            # the 480p-requested-vs-720p-billed question. He should never
-            # hand over a login/password for this - fal.ai has its own
-            # real, documented REST API (docs.fal.ai "Platform APIs ->
-            # List Requests by Endpoint") that answers it directly, using
-            # the SAME FAL_KEY already in .env (no new credential at all).
-            # GET /v1/models/requests/by-endpoint with expand=payloads
-            # returns json_input - the ACTUAL request body fal.ai recorded
-            # receiving for each real past request - which either DOES or
-            # does NOT contain "resolution":"480p". The real $FAL_KEY value
-            # is never printed, same convention as the key-presence check
-            # above; only the resolution/status/duration fields pulled out
-            # of the real response are printed. Will be removed once read.
-            echo "=== fal.ai real Request History: last 5 speech-to-video calls ==="
-            if grep -q "^FAL_KEY=..*" .env 2>/dev/null; then
-              curl -s "https://api.fal.ai/v1/models/requests/by-endpoint?endpoint_id=fal-ai%2Fwan%2Fv2.2-14b%2Fspeech-to-video&limit=5&expand=payloads" \
-                -H "Authorization: Key $(grep '^FAL_KEY=' .env | cut -d= -f2-)" \
-                | grep -oE '"(request_id|status_code|duration|resolution)":("[^"]*"|[0-9.]*)'
-            else
-              echo "FAL_KEY not set - cannot query"
-            fi
