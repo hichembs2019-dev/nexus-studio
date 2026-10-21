@@ -47,7 +47,12 @@ class Character:
     """
 
     name: str
-    voice: str = "ar-SY-LaithNeural"
+    # Owner's instruction, 2026-10-21: switched back to Tunisian - see
+    # character_photos.py's own docstring for the full real history
+    # (Tunisian -> Syrian on 2026-10-19, reversed back on 2026-10-21
+    # after a real produced episode's audio proved the Syrian dialect
+    # genuinely unclear to the owner, contradicting the earlier reasoning).
+    voice: str = "ar-TN-HediNeural"
     # Owner's instruction, 2026-10-20, rejecting a fixed panel of six
     # generic photos reused across every story forever ("لا تكون صور
     # ثابتة الى الابد ... بل حسب القصة و السيناريو" - not fixed forever,

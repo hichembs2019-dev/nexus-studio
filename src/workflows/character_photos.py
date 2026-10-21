@@ -18,19 +18,24 @@ used in [Turkish series] dubbing was "neutral" and very understandable
 across all of North Africa): switched from Tunisian to Syrian voices for
 exactly this reason - wider reach across the whole Arabic-speaking
 audience this project is meant to publish to, not just Tunisia.
-`ar-SY-AmanyNeural` (female) and `ar-SY-LaithNeural` (male) are both
-real, live-verified Syrian Arabic Azure voices, Status "GA", confirmed
-the same way the Tunisian ones were (a real `GET .../voices/list` against
-this project's own Azure resource, docs/SOURCES.md "Language and visual
-style") - not a guess, and not assumed from the general region table.
+
+**Reversed, 2026-10-21**: a real produced episode's own real audio
+proved the opposite in practice - the owner reported the Syrian dialect
+as genuinely unclear to him ("اللهجة عربية مختلفة" - a different
+[from what I understand] Arabic dialect), directly contradicting the
+2026-10-19 reasoning above. Switched back to the original Tunisian
+voices. `ar-TN-ReemNeural` (female) and `ar-TN-HediNeural` (male) are
+both real, live-verified Tunisian Arabic Azure voices, Status "GA" -
+the exact same real `GET .../voices/list` verification already on file
+(docs/SOURCES.md "Azure TTS voiceover"), not a new, unverified guess.
 This voice choice is unaffected by the photo deletion above - it is a
 property of the character's own name/speaking role, not their face.
 """
 from __future__ import annotations
 
 _VOICE_BY_GENDER = {
-    "male": "ar-SY-LaithNeural",
-    "female": "ar-SY-AmanyNeural",
+    "male": "ar-TN-HediNeural",
+    "female": "ar-TN-ReemNeural",
 }
 
 
