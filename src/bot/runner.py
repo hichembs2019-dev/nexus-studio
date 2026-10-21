@@ -160,13 +160,31 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
             )
 
     async def _new(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        # Real bug found by code review, 2026-10-21: context.args splits
+        # on ANY whitespace, including real newlines - exactly the same
+        # defect /edit was fixed for on 2026-10-20, left unfixed here. A
+        # story typed directly after "/new 30 ..." (rather than sent as
+        # separate plain messages first) had every one of its real
+        # newlines silently collapsed into single spaces before reaching
+        # handle_new. Same fix: read the raw message text and split only
+        # once, so everything after the command - every real newline
+        # included - reaches handle_new intact.
         chat_id = str(update.effective_chat.id)
-        reply = conversation.handle_new(chat_id, " ".join(context.args))
+        raw_text = update.message.text or ""
+        parts = raw_text.split(None, 1)
+        args_text = parts[1] if len(parts) == 2 else ""
+        reply = conversation.handle_new(chat_id, args_text)
         await _send_reply(chat_id, context, reply)
 
     async def _full(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+        # Same real bug and same fix as _new above - a story typed
+        # directly after "/full" lost every real newline to
+        # context.args's whitespace tokenization before this.
         chat_id = str(update.effective_chat.id)
-        reply = conversation.handle_full(chat_id, " ".join(context.args))
+        raw_text = update.message.text or ""
+        parts = raw_text.split(None, 1)
+        args_text = parts[1] if len(parts) == 2 else ""
+        reply = conversation.handle_full(chat_id, args_text)
         await _send_reply(chat_id, context, reply)
 
     async def _text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

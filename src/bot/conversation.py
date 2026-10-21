@@ -340,14 +340,18 @@ class BotConversation:
             if produced.skipped_lines
             else ""
         )
-        # Owner's instruction, 2026-10-20: a real photo is now generated
-        # per character per story - if that real generation fails for a
-        # character, production still continues with their cheap generic
-        # placeholder (DialoguePipeline's own fallback) rather than
-        # aborting, but the owner must be told by name which character
-        # that happened to, not left to notice a face doesn't match.
+        # Real bug found by code review, 2026-10-21: this message still
+        # said "(a placeholder photo was used instead)" after the owner's
+        # standing instruction to delete that fallback outright - with no
+        # fallback left, a portrait failure now means that character's
+        # lines FAILED (zero cost, reported in failed_note above), not
+        # that production continued with a stand-in face. Left unfixed
+        # when the fallback itself was deleted, this message would have
+        # told the owner something false about their own real production
+        # run - exactly the kind of mismatch they have been catching all
+        # session.
         portrait_note = (
-            "\n\n🖼️ تعذّر توليد صورة واقعية لهذه الشخصيات (استُخدمت صورة افتراضية بدلاً منها):\n"
+            "\n\n🖼️ تعذّر توليد صورة حقيقية لهذه الشخصيات، فلم تُنتَج أسطرها (بدون أي تكلفة - لا توجد صورة احتياطية بأمر المالك):\n"
             + "\n".join(f"- {name}: {error}" for name, error in produced.portrait_failures)
             if produced.portrait_failures
             else ""

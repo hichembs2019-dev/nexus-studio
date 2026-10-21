@@ -1045,3 +1045,27 @@ Covered by `tests/test_bot_conversation.py::test_new_cost_estimate_includes_real
 ### What this review covered and did not
 
 Read start to finish: `conversation.py`, `runner.py`, `dialogue_writer.py`, `dialogue_pipeline.py`, `models.py`, `app.py`, `config.py`, every integration client (`fal_video_client.py`, `image_client.py`, `tts_client.py`, `reasoning_client.py`, `publishing_client.py`), `character_photos.py`, `_text_parsing.py`, `main.py`. A repo-wide grep for the same ASCII-only pattern class (`[a-z0-9]`, `[a-zA-Z]`) confirmed no other instance of it exists anywhere in `src/`. This is a code-level review for correctness bugs, not a live production test - the owner's own standing rule in this project's `CLAUDE.md` still applies: nothing here is "proven" until a real run on the real bot produces a real, inspected result.
+
+## Second review pass, same instruction ("راجع مرات و مرات" - review again and again) - three more real findings (2026-10-21)
+
+### 4. A user-facing message still claimed a fallback photo that no longer exists
+
+`conversation.py`'s `format_produced()` had a `portrait_note` that said, verbatim, "(استُخدمت صورة افتراضية بدلاً منها)" - "(a placeholder photo was used instead)" - whenever a character's real portrait generation failed. This sentence was true when it was written (2026-10-20, when a generic fallback really did exist) and became **false** the moment the fallback itself was deleted earlier today, per the owner's own standing instruction - a portrait failure now means that character's lines failed outright (zero cost), not that production quietly continued with a stand-in face. The message was never updated when the behavior it described was deleted - exactly the kind of mismatch the owner caught once already today ("ما هو 101؟"). Fixed: the message now says the real thing that happens - the character's lines were not produced, no cost, no fallback.
+
+Covered by `tests/test_bot_conversation.py::test_format_produced_reports_portrait_generation_failures_by_character_name`, strengthened with a negative assertion (`"استُخدمت صورة افتراضية" not in reply.text`) and a positive one for the real new wording. Mutation-tested: restored the old sentence, confirmed the test fails on the negative assertion, restored the fix, confirmed the full suite green.
+
+### 5. `/new` and `/full` lost real newlines the same way `/edit` used to, before its own 2026-10-20 fix
+
+`runner.py`'s `_new`/`_full` handlers built the premise from `" ".join(context.args)` - python-telegram-bot's own whitespace-tokenized argument list, which treats a real newline exactly like a space. Reproduced directly: `/new 30 line one\nline two\nline three` arrives as `context.args = ["30", "line", "one", "line", "two", "line", "three"]`, and `" ".join(...)` collapses every line break into a single space before the premise ever reaches `handle_new`. This is the identical defect class `_edit` was fixed for on 2026-10-20 ("context.args splits the message on ANY whitespace, including newlines, collapsing multiple edits into one unparseable blob") - left unfixed in the two handlers that build a real story's premise. The dominant real workflow (sending the story as separate plain messages first, then a bare `/new`/`/full`) never triggers this, but a story typed directly after the command on one message does, and silently loses its paragraph structure.
+
+**Fixed**: both handlers now read `update.message.text` directly and split only once (`split(None, 1)`), the exact same fix already proven for `/edit`.
+
+Not independently unit-tested - `runner.py` is explicitly documented (its own module docstring) as needing a real bot token and live Telegram connection to exercise at all, the same reason `/edit`'s identical fix was never unit-tested either. Verified by direct reproduction (shown above) and code symmetry with `/edit`'s already-proven fix, and will be verified live on first real use.
+
+### 6. Two cast members with the same name would silently merge into one
+
+`dialogue_writer.py`'s `_parse_cast()` never checked for duplicate names. `DialoguePipeline.produce()` keys its character lookup with a plain dict comprehension (`characters_by_name = {c.name: c for c in screenplay.characters}`), which keeps only the LAST entry for a repeated key - if the model's cast reply ever named two different characters the same thing (a real, if infrequent, LLM failure mode - two father figures, a reused generic role name, or simple model error), the first one's gender/voice/appearance would be silently discarded, and every line attributed to that name would use the second character's real generated photo and voice. This is the exact "wrong face for a character" defect the owner has fought all session, reachable through a completely different door than the Arabic-slug bug found in the first review pass.
+
+**Fixed**: `_parse_cast()` now checks for duplicate names and raises `DialogueWriterError` naming them, before any screenplay is built or any line-writing call is made.
+
+Covered by `tests/test_dialogue_writer.py::test_parse_cast_rejects_two_characters_with_the_same_name`, asserting the error names the duplicated character and that the lines-writing call is never reached (no real cost risked on a screenplay that was always going to be built wrong). Mutation-tested: removed the check, confirmed the test fails (the mock reasoning client is exhausted trying to serve a lines-writing call that should never have happened), restored, confirmed the full suite green.

@@ -141,10 +141,12 @@ class ProducedDialogueEpisode:
     # Owner's instruction, 2026-10-20: a real reference photo generated
     # per character per screenplay (not a fixed panel reused forever -
     # see Character.appearance) - its real cost must be visible in the
-    # same total the owner already checks, and a failure to generate one
-    # must fall back to the cheap generic placeholder for that character
-    # rather than aborting the whole episode, with the real reason kept
-    # here instead of silently swallowed.
+    # same total the owner already checks. Owner's standing instruction,
+    # 2026-10-21: a failure to generate one fails that character's own
+    # lines (zero cost) rather than falling back to any placeholder -
+    # there is none left in this codebase - with the real reason kept
+    # here instead of silently swallowed, never discarding the rest of
+    # the episode over it.
     portrait_cost_usd: float = 0.0
     portrait_failures: list[tuple[str, str]] = field(default_factory=list)
 

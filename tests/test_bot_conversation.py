@@ -418,11 +418,15 @@ def test_format_produced_reports_lines_skipped_by_the_hard_cost_ceiling():
 
 
 def test_format_produced_reports_portrait_generation_failures_by_character_name():
-    # Owner's instruction, 2026-10-20: a real, story-specific photo is
-    # generated per character - if that fails for one of them, production
-    # still continues with their cheap generic placeholder, but the owner
-    # must be told by name which character that happened to, not left to
-    # notice a mismatched face on their own.
+    # Owner's standing instruction, 2026-10-21 ("احذف الستة صور"): a real,
+    # story-specific photo is generated per character - if that fails,
+    # there is no fallback any more, so that character's lines fail
+    # (zero cost) instead of production continuing with a placeholder
+    # face. Real bug found by code review the same day: this message
+    # used to say "(a placeholder photo was used instead)" - false once
+    # the fallback itself was deleted, and left unfixed when it was -
+    # the owner must be told the truth (the line failed), not a claim
+    # about a placeholder that no longer exists anywhere in this code.
     conversation, _ = _conversation([])
     screenplay = DialogueScreenplay(title="T", premise="p", characters=[], lines=[])
     clip = ProducedDialogueClip(line=DialogueLine(index=0, character="X", line="hi"), local_path="/tmp/c0.mp4", cost_usd=0.4)
@@ -435,6 +439,8 @@ def test_format_produced_reports_portrait_generation_failures_by_character_name(
 
     assert "فوزية" in reply.text
     assert "real reason" in reply.text
+    assert "استُخدمت صورة افتراضية" not in reply.text  # no fallback exists any more - never claim one was used
+    assert "فلم تُنتَج أسطرها" in reply.text  # must say the lines failed instead
 
 
 def test_format_produced_reports_failed_lines_by_number():

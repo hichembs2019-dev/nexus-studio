@@ -321,4 +321,20 @@ class DialogueWriterAgent:
                     "يتكلم في القصة يجب أن يكون شخصية حقيقية تظهر في المشهد وتتكلم مباشرة، لا راويًا "
                     f"يسرد الأحداث. أعد المحاولة أو عدّل النص: {raw_reply!r}"
                 )
+        # Real bug found by code review, 2026-10-21: two cast entries
+        # with the same name were never rejected. DialoguePipeline keys
+        # its own character lookup by name (characters_by_name = {c.name:
+        # c for c in screenplay.characters}) - a dict comprehension keeps
+        # only the LAST entry for a duplicate key, silently discarding
+        # the first one's gender/voice/appearance. Any line attributed to
+        # that name would then silently use the wrong character's real
+        # generated photo and voice - the exact "wrong face" defect this
+        # whole project has been fighting, through a different door.
+        names = [item["name"] for item in parsed]
+        if len(names) != len(set(names)):
+            duplicates = sorted({n for n in names if names.count(n) > 1})
+            raise DialogueWriterError(
+                f"الذكاء الاصطناعي كرر نفس اسم الشخصية أكثر من مرة ({', '.join(duplicates)}) - هذا يسبب "
+                f"اختلاط الأصوات والصور بين شخصيتين مختلفتين. أعد المحاولة أو عدّل النص: {raw_reply!r}"
+            )
         return parsed

@@ -363,3 +363,26 @@ def test_parse_cast_rejects_an_empty_string_field_value():
 
     with pytest.raises(DialogueWriterError, match="non-string/empty"):
         writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+
+def test_parse_cast_rejects_two_characters_with_the_same_name():
+    # Real bug found by code review, 2026-10-21: DialoguePipeline keys
+    # its character lookup by name (a plain dict comprehension), which
+    # silently keeps only the LAST of two same-named cast entries -
+    # every line attributed to that name would then silently use the
+    # wrong character's real generated photo and voice. Never calling
+    # the lines step once rejected means no real cost is risked on a
+    # screenplay that was always going to be built wrong.
+    cast_reply = json.dumps(
+        [
+            {"name": "الأب", "gender": "male", "appearance": "grey hair, tall"},
+            {"name": "الأب", "gender": "male", "appearance": "bald, short"},
+        ]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="الأب"):
+        writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+    assert len(reasoning.calls) == 1  # the lines step must never be reached
