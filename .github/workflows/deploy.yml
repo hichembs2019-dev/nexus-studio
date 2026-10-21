@@ -36,10 +36,22 @@ jobs:
     steps:
       - name: Deploy over SSH
         uses: appleboy/ssh-action@v1.2.4
+        # Owner added a real Replicate API token as a GitHub repository
+        # secret, 2026-10-21, specifically so it never has to be typed
+        # into a chat or stored anywhere but GitHub's own encrypted
+        # secret store and the real .env file on the droplet - the exact
+        # thing the FAL_KEY/GROQ_API_KEY/etc. keys already do. `envs:`
+        # below is appleboy/ssh-action's own documented mechanism for
+        # forwarding a step-level env var into the remote script's shell
+        # environment (verified against the action's own README,
+        # 2026-10-21) - this value is never printed by this workflow.
+        env:
+          REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
+          envs: REPLICATE_API_TOKEN
           script: |
             set -e
             cd ~/nexus-studio
@@ -53,6 +65,18 @@ jobs:
             # back to doing what every commit message since the first one
             # has described: pull, rebuild, restart, print the real
             # post-deploy logs so a failure is visible in the run itself.
+            # Keeps .env's REPLICATE_API_TOKEN line in sync with the real
+            # GitHub secret on every deploy - upserted (replaced if the
+            # line already exists, appended if not), never printed. This
+            # runs BEFORE the rebuild below so a freshly-added token is
+            # already in .env the moment the container that reads it starts.
+            if [ -n "${REPLICATE_API_TOKEN:-}" ]; then
+              if grep -q "^REPLICATE_API_TOKEN=" .env 2>/dev/null; then
+                sed -i "s|^REPLICATE_API_TOKEN=.*|REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}|" .env
+              else
+                echo "REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}" >> .env
+              fi
+            fi
             git pull origin main
             docker compose up -d --build nexus-studio
             sleep 8
@@ -67,7 +91,7 @@ jobs:
             # Never prints a key's real value - only whether the line in
             # .env has anything after the "=" at all.
             echo "=== real key presence in .env (values never printed) ==="
-            for k in GROQ_API_KEY GEMINI_API_KEY FAL_KEY AZURE_SPEECH_KEY TELEGRAM_BOT_TOKEN; do
+            for k in GROQ_API_KEY GEMINI_API_KEY FAL_KEY AZURE_SPEECH_KEY TELEGRAM_BOT_TOKEN REPLICATE_API_TOKEN; do
               if grep -q "^${k}=..*" .env 2>/dev/null; then
                 echo "$k: SET"
               else
