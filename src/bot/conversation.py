@@ -56,8 +56,8 @@ from dataclasses import dataclass, field
 
 from src.agents.dialogue_writer import DialogueWriterAgent, DialogueWriterError, count_quoted_moments
 from src.agents.publisher import PublishingAgent
-from src.integrations.fal_video_client import REAL_BILLED_PRICE_PER_SECOND_USD
-from src.integrations.image_client import PRICE_PER_MEGAPIXEL_USD
+from src.integrations.replicate_image_client import PRICE_PER_IMAGE_USD_UNVERIFIED
+from src.integrations.replicate_video_client import PROVISIONAL_PRICE_PER_SECOND_USD
 from src.models import DialogueScreenplay, ProducedDialogueEpisode
 
 DEFAULT_TARGET_SECONDS = 60.0
@@ -136,25 +136,18 @@ class BotConversation:
         self,
         dialogue_writer: DialogueWriterAgent,
         publisher: PublishingAgent,
-        # Real finding, 2026-10-21: this used to import and hard-code
-        # fal.ai's own REAL_BILLED_PRICE_PER_SECOND_USD directly in
-        # _format_screenplay below - silently showing the owner a cost
-        # estimate computed at fal.ai's real rate even on a build wired
-        # to a different real provider (Replicate, added the same
-        # night), exactly the "estimate doesn't match the real provider"
-        # defect this project spent the whole evening fixing for fal.ai
-        # itself. The real rate for whichever provider is actually
-        # wired in (src/app.py, same value passed to DialoguePipeline's
-        # own price_per_second_usd) must be passed explicitly - never
-        # assumed here.
-        price_per_second_usd: float = REAL_BILLED_PRICE_PER_SECOND_USD,
+        # Real finding, 2026-10-21: the real rate for whichever provider
+        # is actually wired in (src/app.py, same value passed to
+        # DialoguePipeline's own price_per_second_usd) must be passed
+        # explicitly here - never hard-coded, which is exactly the
+        # "estimate doesn't match the real provider" defect this project
+        # spent the whole evening fixing for fal.ai's own rate before
+        # fal.ai was deleted outright.
+        price_per_second_usd: float = PROVISIONAL_PRICE_PER_SECOND_USD,
         # Owner's instruction, 2026-10-21 ("قم بالتنظيف ... كثرة الكودات
-        # اصبحت تتداخل في بعضها"): same defect as price_per_second_usd
-        # above, just for the portrait cost component of the estimate -
-        # _format_screenplay used to hard-code fal.ai's own
-        # PRICE_PER_MEGAPIXEL_USD regardless of which real image
-        # provider DialoguePipeline is actually wired to.
-        price_per_image_usd: float = PRICE_PER_MEGAPIXEL_USD,
+        # اصبحت تتداخل في بعضها"): same reasoning as price_per_second_usd
+        # above, for the portrait cost component of the estimate.
+        price_per_image_usd: float = PRICE_PER_IMAGE_USD_UNVERIFIED,
     ):
         self._dialogue_writer = dialogue_writer
         self._publisher = publisher
@@ -484,8 +477,8 @@ class BotConversation:
         # speaking role, her dialogue stays written on screen, to save
         # money): marks specific line numbers as on-screen text instead
         # of spoken/lip-synced - real zero cost for those lines
-        # (DialoguePipeline.produce() skips TTS and fal.ai entirely for
-        # any line with spoken=False). Same multi-number-per-message
+        # (DialoguePipeline.produce() skips TTS and Replicate entirely
+        # for any line with spoken=False). Same multi-number-per-message
         # pattern as /edit, reusing the exact same freedom the owner
         # insisted on there.
         state = self._states.get(chat_id)

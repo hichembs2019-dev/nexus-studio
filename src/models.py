@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 @dataclass
 class Character:
     """A speaking role. Wan 2.2's speech-to-video call (see
-    fal_video_client.py) takes one reference image per clip, and reusing
+    replicate_video_client.py) takes one reference image per clip, and reusing
     the same real image for every line this character speaks is what
     keeps their face the same person scene to scene - DialoguePipeline
     generates that real image itself, from `appearance` below, and

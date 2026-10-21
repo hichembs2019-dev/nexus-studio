@@ -91,7 +91,7 @@ jobs:
             # Never prints a key's real value - only whether the line in
             # .env has anything after the "=" at all.
             echo "=== real key presence in .env (values never printed) ==="
-            for k in GROQ_API_KEY GEMINI_API_KEY FAL_KEY AZURE_SPEECH_KEY TELEGRAM_BOT_TOKEN REPLICATE_API_TOKEN; do
+            for k in GROQ_API_KEY GEMINI_API_KEY AZURE_SPEECH_KEY TELEGRAM_BOT_TOKEN REPLICATE_API_TOKEN; do
               if grep -q "^${k}=..*" .env 2>/dev/null; then
                 echo "$k: SET"
               else

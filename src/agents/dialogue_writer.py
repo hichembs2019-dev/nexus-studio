@@ -3,7 +3,7 @@ screenplay - actual people speaking actual lines - the owner's real ask
 ("مسلسلات وأفلام ... لربح المال", series and films, not a narrated
 documentary). Replaces WriterAgent's prose-beat output for any episode
 meant to go through DialoguePipeline (real lip-synced speech, see
-fal_video_client.py): that pipeline needs a speaker attached to every
+replicate_video_client.py): that pipeline needs a speaker attached to every
 line it generates, not a block of narrative text a human would have to
 re-parse for "who says what".
 

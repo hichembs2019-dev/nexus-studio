@@ -5,8 +5,8 @@ import json
 from src.agents.dialogue_writer import DialogueWriterAgent
 from src.agents.publisher import PublishingAgent
 from src.bot.conversation import ESTIMATED_SECONDS_PER_LINE, BotConversation, TELEGRAM_MESSAGE_LIMIT, split_for_telegram
-from src.integrations.fal_video_client import REAL_BILLED_PRICE_PER_SECOND_USD
-from src.integrations.image_client import PRICE_PER_MEGAPIXEL_USD
+from src.integrations.replicate_image_client import PRICE_PER_IMAGE_USD_UNVERIFIED
+from src.integrations.replicate_video_client import PROVISIONAL_PRICE_PER_SECOND_USD
 from src.integrations.publishing_client import MockPublishingClient
 from src.integrations.reasoning_client import MockAgentReasoningClient
 from src.models import Character, DialogueLine, DialogueScreenplay, ProducedDialogueClip, ProducedDialogueEpisode
@@ -42,15 +42,12 @@ def test_new_with_explicit_seconds_writes_a_screenplay_sized_to_them():
 
 
 def test_new_cost_estimate_uses_the_real_price_per_second_explicitly_passed_in():
-    # Real gap found by code review, 2026-10-21: BotConversation used to
-    # import and hard-code fal.ai's own REAL_BILLED_PRICE_PER_SECOND_USD
-    # directly in _format_screenplay, so the pre-Approve estimate would
-    # silently stay at fal.ai's rate even when the actual pipeline is
-    # wired to a different real provider (Replicate, added the same
-    # night) - exactly the "estimate doesn't match the real provider"
-    # defect this project spent the whole evening fixing for fal.ai
-    # itself. 0.05 is distinct from both fal.ai's 0.10 and 0.20
-    # constants so this can't pass by coincidence.
+    # Real gap found by code review, 2026-10-21: BotConversation must
+    # never hard-code a provider's own price constant directly in
+    # _format_screenplay - the pre-Approve estimate must use whichever
+    # real rate is actually passed in (src/app.py). 0.05 here is
+    # distinct from PROVISIONAL_PRICE_PER_SECOND_USD so this can't pass
+    # by coincidence.
     cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
     reasoning = MockAgentReasoningClient(scripted_replies=[cast, lines])
@@ -60,9 +57,9 @@ def test_new_cost_estimate_uses_the_real_price_per_second_explicitly_passed_in()
 
     reply = conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
 
-    from src.integrations.image_client import PRICE_PER_MEGAPIXEL_USD
+    from src.integrations.replicate_image_client import PRICE_PER_IMAGE_USD_UNVERIFIED
 
-    expected_cost = 2 * ESTIMATED_SECONDS_PER_LINE * 0.05 + 1 * PRICE_PER_MEGAPIXEL_USD
+    expected_cost = 2 * ESTIMATED_SECONDS_PER_LINE * 0.05 + 1 * PRICE_PER_IMAGE_USD_UNVERIFIED
     assert f"${expected_cost:.2f}" in reply.text
 
 
@@ -80,7 +77,7 @@ def test_new_cost_estimate_uses_the_real_price_per_image_explicitly_passed_in():
 
     reply = conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
 
-    expected_cost = 2 * ESTIMATED_SECONDS_PER_LINE * REAL_BILLED_PRICE_PER_SECOND_USD + 1 * 0.09
+    expected_cost = 2 * ESTIMATED_SECONDS_PER_LINE * PROVISIONAL_PRICE_PER_SECOND_USD + 1 * 0.09
     assert f"${expected_cost:.2f}" in reply.text
 
 
@@ -98,9 +95,9 @@ def test_new_cost_estimate_includes_real_portrait_generation_cost():
 
     reply = conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
 
-    from src.integrations.image_client import PRICE_PER_MEGAPIXEL_USD
+    from src.integrations.replicate_image_client import PRICE_PER_IMAGE_USD_UNVERIFIED
 
-    expected_cost = 2 * ESTIMATED_SECONDS_PER_LINE * REAL_BILLED_PRICE_PER_SECOND_USD + 2 * PRICE_PER_MEGAPIXEL_USD
+    expected_cost = 2 * ESTIMATED_SECONDS_PER_LINE * PROVISIONAL_PRICE_PER_SECOND_USD + 2 * PRICE_PER_IMAGE_USD_UNVERIFIED
     assert f"${expected_cost:.2f}" in reply.text
 
 
@@ -368,7 +365,7 @@ def test_caption_marks_a_line_as_on_screen_text_with_zero_estimated_cost():
     # still need a real generated portrait - that real cost must still
     # be in the estimate too (real bug found by code review, 2026-10-21:
     # it never was, before this).
-    expected_cost = 1 * ESTIMATED_SECONDS_PER_LINE * REAL_BILLED_PRICE_PER_SECOND_USD + 2 * PRICE_PER_MEGAPIXEL_USD
+    expected_cost = 1 * ESTIMATED_SECONDS_PER_LINE * PROVISIONAL_PRICE_PER_SECOND_USD + 2 * PRICE_PER_IMAGE_USD_UNVERIFIED
     assert f"${expected_cost:.2f}" in reply.text
     assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
 

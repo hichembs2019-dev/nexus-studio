@@ -1,9 +1,17 @@
 """Turns an approved DialogueScreenplay into real lip-synced clips and one
-stitched episode, backed by FalVideoClient's real
-fal-ai/wan/v2.2-14b/speech-to-video call - real characters speaking real
+stitched episode, backed by ReplicateVideoClient's real
+wan-video/wan-2.2-s2v speech-to-video call - real characters speaking real
 lines, the only pipeline this codebase has (see models.py's own
 docstring: the old silent-T2V-plus-narration pipeline this one replaced
 is deleted outright, not merely unused).
+
+Owner's standing instruction, 2026-10-21 ("لا تضع السراق ... احذفهم من
+الكود" - don't put the thieves [fal.ai] in, remove them from the code,
+repeated twice more with "خذ وقتك ... هذا ما طلبته منك بالظبط"): fal.ai's
+own client (`fal_video_client.py`, `image_client.py`) is deleted outright
+from this repository, after its own real billing could not be trusted
+(see docs/SOURCES.md, the 720p/480p finding). Replicate is the only real
+video/image provider this pipeline can be wired to.
 
 Clip length is NOT fixed - it is however long that line's own TTS audio
 runs, because the model lip-syncs to the real audio track it is given.
@@ -23,8 +31,8 @@ import mimetypes
 import os
 import subprocess
 
-from src.integrations.fal_video_client import REAL_BILLED_PRICE_PER_SECOND_USD, FalVideoClient
-from src.integrations.image_client import PRICE_PER_MEGAPIXEL_USD, ImageClient
+from src.integrations.replicate_image_client import PRICE_PER_IMAGE_USD_UNVERIFIED, ReplicateImageClient
+from src.integrations.replicate_video_client import PROVISIONAL_PRICE_PER_SECOND_USD, ReplicateVideoClient
 from src.integrations.tts_client import TTSClient
 from src.models import Character, DialogueScreenplay, ProducedDialogueClip, ProducedDialogueEpisode
 
@@ -131,37 +139,26 @@ def _ffprobe_duration(path: str) -> float:
 class DialoguePipeline:
     def __init__(
         self,
-        fal_video: FalVideoClient,
+        fal_video: ReplicateVideoClient,
         tts: TTSClient,
         output_dir: str,
         *,
         tts_lang: str = "ar-SY",
         resolution: str = "480p",
         max_cost_usd: float | None = None,
-        image_client: ImageClient | None = None,
+        image_client: ReplicateImageClient | None = None,
         # Real finding, 2026-10-21 ("و لماذا تتسرب الأسعار ... ألم تقل لك
-        # من قبل؟"): this used to import and hard-code fal.ai's own
-        # REAL_BILLED_PRICE_PER_SECOND_USD directly, which silently
-        # computed every real cost (the pre-Approve estimate AND the real
-        # MAX_EPISODE_COST_USD spend ceiling) at fal.ai's rate even if
-        # `fal_video` above were ever swapped for a different real
-        # provider (Replicate, added the same night) - exactly the "wrong
-        # rate used without anyone noticing" defect this project spent
-        # the whole evening fixing for fal.ai itself. The real rate for
-        # whichever client is actually wired in must now be passed
-        # explicitly by the caller (src/app.py) - never assumed here.
-        price_per_second_usd: float = REAL_BILLED_PRICE_PER_SECOND_USD,
+        # من قبل؟"): the real rate for whichever client is actually wired
+        # in must be passed explicitly by the caller (src/app.py) - never
+        # hard-coded here, which is exactly the "wrong rate used without
+        # anyone noticing" defect this project spent the whole evening
+        # fixing for fal.ai's own rate before fal.ai was deleted outright.
+        price_per_second_usd: float = PROVISIONAL_PRICE_PER_SECOND_USD,
         # Owner's instruction, 2026-10-21 ("قم بالتنظيف ... كثرة الكودات
         # اصبحت تتداخل في بعضها" - clean up, too much code has started
-        # to overlap): found by that same review - the portrait cost
-        # below had the IDENTICAL defect just fixed for video seconds
-        # above, just never caught: hard-coded to fal.ai's own
-        # PRICE_PER_MEGAPIXEL_USD regardless of which image_client is
-        # actually wired in. The two placeholder values happen to be
-        # equal right now (both 0.025), which is exactly why this went
-        # unnoticed - a real, independent Replicate image-price test
-        # would have silently diverged the moment the numbers differed.
-        price_per_image_usd: float = PRICE_PER_MEGAPIXEL_USD,
+        # to overlap): same reasoning as price_per_second_usd above, for
+        # the portrait cost component.
+        price_per_image_usd: float = PRICE_PER_IMAGE_USD_UNVERIFIED,
     ):
         self._fal_video = fal_video
         self._tts = tts
@@ -465,13 +462,7 @@ class DialoguePipeline:
         if os.path.isfile(cache_path):
             return cache_path, 0.0, None
         if self._image_client is None:
-            # Owner's instruction, 2026-10-21 ("قم بالتنظيف"): used to
-            # name FAL_KEY specifically, which became wrong and
-            # misleading the moment Replicate became the real default
-            # image provider - this message is shown to the owner
-            # directly and must name the real missing credential, not a
-            # stale one from before the provider could differ.
-            return None, 0.0, "لا يوجد اتصال حقيقي بمولّد الصور (FAL_KEY أو REPLICATE_API_TOKEN غير مُهيَّأ)"
+            return None, 0.0, "لا يوجد اتصال حقيقي بمولّد الصور (REPLICATE_API_TOKEN غير مُهيَّأ)"
         if not character.appearance:
             return None, 0.0, "لا يوجد وصف لهذه الشخصية لتوليد صورة حقيقية منه"
         try:

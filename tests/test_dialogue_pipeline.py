@@ -7,8 +7,12 @@ import pytest
 
 import base64
 
-from src.integrations.fal_video_client import REAL_BILLED_PRICE_PER_SECOND_USD, MockFalVideoClient
-from src.integrations.image_client import ImageGenerationError, MockImageClient, PRICE_PER_MEGAPIXEL_USD
+from src.integrations.replicate_image_client import (
+    PRICE_PER_IMAGE_USD_UNVERIFIED,
+    MockReplicateImageClient,
+    ReplicateImageError,
+)
+from src.integrations.replicate_video_client import PROVISIONAL_PRICE_PER_SECOND_USD, MockReplicateVideoClient
 from src.integrations.tts_client import MockTTSClient
 from src.models import Character, DialogueLine, DialogueScreenplay
 from src.workflows.dialogue_pipeline import (
@@ -48,7 +52,7 @@ def _real_mp3_bytes(path: str, duration_seconds: float = 1.0) -> bytes:
 def _real_jpeg_bytes(path: str) -> bytes:
     # The caption group photo is built with a real ffmpeg call
     # (_build_caption_group_image) over whatever bytes a generated
-    # portrait came back as - MockImageClient's own default scripted
+    # portrait came back as - MockReplicateImageClient's own default scripted
     # bytes are plain text, not a real image, which ffmpeg correctly
     # refuses to read. Any test that exercises the caption path for
     # real needs an image client that hands back genuine JPEG bytes.
@@ -64,7 +68,7 @@ def _real_jpeg_bytes(path: str) -> bytes:
 # حسب القصة" - delete the six photos, I told you generation must be
 # per-story): every test below that needs a character to actually have a
 # usable photo now goes through the SAME real path production itself
-# uses - a MockImageClient + a real `appearance` string - never a
+# uses - a MockReplicateImageClient + a real `appearance` string - never a
 # pre-made file passed in as a fallback. There is no other way to get a
 # character a photo any more.
 
@@ -87,8 +91,8 @@ def test_produce_gives_different_arabic_named_characters_their_own_cached_photo(
     # fighting to eliminate all session, reintroduced by this bug in
     # the very mechanism meant to prevent it.
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
-    image_client = MockImageClient()
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
+    image_client = MockReplicateImageClient()
     pipeline = DialoguePipeline(fal_video, MockTTSClient(), str(tmp_path), image_client=image_client)
     screenplay = DialogueScreenplay(
         title="جسد بلا روح",
@@ -117,7 +121,7 @@ def test_produce_fails_every_line_when_no_image_client_is_configured(tmp_path):
     # No fallback face exists at all: without a real image client, NO
     # character can ever get a photo, so every one of their lines fails
     # with zero cost rather than ever using a stand-in.
-    fal_video = MockFalVideoClient()
+    fal_video = MockReplicateVideoClient()
     pipeline = DialoguePipeline(fal_video, MockTTSClient(), str(tmp_path))  # no image_client
     screenplay = DialogueScreenplay(
         title="Dinner", premise="p",
@@ -128,7 +132,7 @@ def test_produce_fails_every_line_when_no_image_client_is_configured(tmp_path):
     produced = pipeline.produce(screenplay)
 
     assert produced.portrait_cost_usd == 0.0
-    assert produced.portrait_failures == [("A", "لا يوجد اتصال حقيقي بمولّد الصور (FAL_KEY أو REPLICATE_API_TOKEN غير مُهيَّأ)")]
+    assert produced.portrait_failures == [("A", "لا يوجد اتصال حقيقي بمولّد الصور (REPLICATE_API_TOKEN غير مُهيَّأ)")]
     assert len(produced.clips) == 0
     assert len(fal_video.calls) == 0  # never even reached fal.ai - no photo to send it
     assert len(produced.failed_lines) == 1
@@ -136,8 +140,8 @@ def test_produce_fails_every_line_when_no_image_client_is_configured(tmp_path):
 
 
 def test_produce_fails_a_characters_lines_when_it_has_no_appearance_description(tmp_path):
-    image_client = MockImageClient()
-    fal_video = MockFalVideoClient()
+    image_client = MockReplicateImageClient()
+    fal_video = MockReplicateVideoClient()
     pipeline = DialoguePipeline(fal_video, MockTTSClient(), str(tmp_path), image_client=image_client)
     screenplay = DialogueScreenplay(
         title="Dinner", premise="p",
@@ -150,16 +154,16 @@ def test_produce_fails_a_characters_lines_when_it_has_no_appearance_description(
     assert image_client.calls == []  # never even asked to generate - nothing to generate from
     assert produced.portrait_failures == [("A", "لا يوجد وصف لهذه الشخصية لتوليد صورة حقيقية منه")]
     assert len(produced.clips) == 0
-    assert len(fal_video.calls) == 0  # never reached fal.ai at all - no real photo existed to send
+    assert len(fal_video.calls) == 0  # never reached Replicate at all - no real photo existed to send
     assert len(produced.failed_lines) == 1
 
 
 def test_produce_fails_the_characters_lines_when_real_portrait_generation_fails(tmp_path):
     class _FailingImageClient:
         def generate_image(self, prompt):
-            raise ImageGenerationError("fal.ai image job failed: simulated real failure")
+            raise ReplicateImageError("Replicate image job failed: simulated real failure")
 
-    fal_video = MockFalVideoClient()
+    fal_video = MockReplicateVideoClient()
     pipeline = DialoguePipeline(fal_video, MockTTSClient(), str(tmp_path), image_client=_FailingImageClient())
     screenplay = DialogueScreenplay(
         title="Dinner", premise="p",
@@ -170,12 +174,12 @@ def test_produce_fails_the_characters_lines_when_real_portrait_generation_fails(
     produced = pipeline.produce(screenplay)
 
     assert len(produced.clips) == 0  # the line never ran - no fallback face, by the owner's order
-    assert len(fal_video.calls) == 0  # fal.ai video was never called - no photo existed to send
+    assert len(fal_video.calls) == 0  # Replicate video was never called - no photo existed to send
     assert len(produced.failed_lines) == 1
     failed_line, message = produced.failed_lines[0]
     assert failed_line.index == 0
     assert "simulated real failure" in message
-    assert produced.portrait_failures == [("A", "fal.ai image job failed: simulated real failure")]
+    assert produced.portrait_failures == [("A", "Replicate image job failed: simulated real failure")]
     assert produced.portrait_cost_usd == 0.0
     assert produced.total_cost_usd == 0.0
 
@@ -183,9 +187,9 @@ def test_produce_fails_the_characters_lines_when_real_portrait_generation_fails(
 def test_produce_single_line_calls_tts_then_fal_with_data_uris_and_saves_the_clip(tmp_path):
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
 
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
     tts = MockTTSClient(scripted_bytes=b"\xff\xfbfake-mp3")
-    image_client = MockImageClient(scripted_bytes=b"real-generated-portrait-bytes")
+    image_client = MockReplicateImageClient(scripted_bytes=b"real-generated-portrait-bytes")
     pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=image_client)
     screenplay = DialogueScreenplay(
         title="Dinner",
@@ -211,28 +215,25 @@ def test_produce_single_line_calls_tts_then_fal_with_data_uris_and_saves_the_cli
     assert len(produced.clips) == 1
     assert os.path.exists(produced.clips[0].local_path)
     assert produced.stitched_path == produced.clips[0].local_path
-    # Real invoice evidence, 2026-10-21: fal.ai bills this model at the
-    # 720p rate regardless of the "480p" actually requested - see
-    # REAL_BILLED_PRICE_PER_SECOND_USD and docs/SOURCES.md.
-    assert produced.clips[0].cost_usd == pytest.approx(1.0 * REAL_BILLED_PRICE_PER_SECOND_USD)
+    # Real, owner-run test, 2026-10-21: one real Replicate call billed
+    # $0.10 for 2s of output - see PROVISIONAL_PRICE_PER_SECOND_USD's own
+    # docstring and docs/SOURCES.md.
+    assert produced.clips[0].cost_usd == pytest.approx(1.0 * PROVISIONAL_PRICE_PER_SECOND_USD)
 
 
 def test_produce_uses_the_real_price_per_second_explicitly_passed_in(tmp_path):
-    # Real gap found by code review, 2026-10-21: DialoguePipeline used to
-    # import and hard-code fal.ai's own REAL_BILLED_PRICE_PER_SECOND_USD
-    # directly, so swapping in a different real provider (Replicate,
-    # added the same night) would silently compute real cost at the
-    # WRONG rate - exactly the "estimate doesn't match the real provider"
-    # defect this project spent the whole evening fixing for fal.ai
-    # itself. price_per_second_usd must now be honored explicitly,
-    # distinct from both fal.ai's 0.10 and 0.20 constants so this can't
-    # pass by coincidence.
+    # Real gap found by code review, 2026-10-21: DialoguePipeline must
+    # never hard-code a provider's own price constant directly - the
+    # real rate for whichever client is actually wired in must be
+    # honored explicitly, passed in by the caller (src/app.py). 0.05
+    # here is distinct from PROVISIONAL_PRICE_PER_SECOND_USD so this
+    # can't pass by coincidence.
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
 
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
     tts = MockTTSClient()
     pipeline = DialoguePipeline(
-        fal_video, tts, str(tmp_path), image_client=MockImageClient(), price_per_second_usd=0.05
+        fal_video, tts, str(tmp_path), image_client=MockReplicateImageClient(), price_per_second_usd=0.05
     )
     screenplay = DialogueScreenplay(
         title="T", premise="p",
@@ -249,14 +250,14 @@ def test_produce_uses_the_real_price_per_image_explicitly_passed_in(tmp_path):
     # Owner's cleanup instruction, 2026-10-21 ("قم بالتنظيف ... كثرة
     # الكودات اصبحت تتداخل في بعضها"): found by that same review - the
     # portrait cost had the IDENTICAL defect as price_per_second_usd
-    # above (hard-coded to fal.ai's PRICE_PER_MEGAPIXEL_USD), just never
+    # above (hard-coded to fal.ai's PRICE_PER_IMAGE_USD_UNVERIFIED), just never
     # caught because both placeholder values happened to equal 0.025.
     # 0.09 here is deliberately distinct from every real constant in the
     # codebase so this can't pass by coincidence.
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
     pipeline = DialoguePipeline(
-        fal_video, MockTTSClient(), str(tmp_path), image_client=MockImageClient(), price_per_image_usd=0.09
+        fal_video, MockTTSClient(), str(tmp_path), image_client=MockReplicateImageClient(), price_per_image_usd=0.09
     )
     screenplay = DialogueScreenplay(
         title="T", premise="p",
@@ -272,9 +273,9 @@ def test_produce_uses_the_real_price_per_image_explicitly_passed_in(tmp_path):
 def test_produce_falls_back_to_a_default_prompt_when_action_is_empty(tmp_path):
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
 
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
     tts = MockTTSClient()
-    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockImageClient())
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockReplicateImageClient())
     screenplay = DialogueScreenplay(
         title="T",
         premise="p",
@@ -290,9 +291,9 @@ def test_produce_falls_back_to_a_default_prompt_when_action_is_empty(tmp_path):
 def test_produce_multi_line_stitches_clips_in_order(tmp_path):
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
 
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
     tts = MockTTSClient()
-    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockImageClient())
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockReplicateImageClient())
     screenplay = DialogueScreenplay(
         title="Dinner",
         premise="p",
@@ -310,7 +311,7 @@ def test_produce_multi_line_stitches_clips_in_order(tmp_path):
     assert os.path.exists(produced.stitched_path)
     # Two distinct speaking characters -> two real clips AND two real
     # per-story portraits, each billed separately.
-    assert produced.total_cost_usd == pytest.approx(2 * 1.0 * REAL_BILLED_PRICE_PER_SECOND_USD + 2 * PRICE_PER_MEGAPIXEL_USD)
+    assert produced.total_cost_usd == pytest.approx(2 * 1.0 * PROVISIONAL_PRICE_PER_SECOND_USD + 2 * PRICE_PER_IMAGE_USD_UNVERIFIED)
 
 
 def test_produce_keeps_real_paid_clips_when_the_final_merge_fails(tmp_path, monkeypatch):
@@ -324,9 +325,9 @@ def test_produce_keeps_real_paid_clips_when_the_final_merge_fails(tmp_path, monk
     # error both survive.
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
 
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
     tts = MockTTSClient()
-    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockImageClient())
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockReplicateImageClient())
     screenplay = DialogueScreenplay(
         title="Dinner",
         premise="p",
@@ -357,7 +358,7 @@ def test_produce_keeps_real_paid_clips_when_the_final_merge_fails(tmp_path, monk
     assert produced.stitched_path is None
     assert produced.stitch_error is not None
     assert "simulated real ffmpeg concat failure" in produced.stitch_error
-    assert produced.total_cost_usd == pytest.approx(2 * 1.0 * REAL_BILLED_PRICE_PER_SECOND_USD + 2 * PRICE_PER_MEGAPIXEL_USD)
+    assert produced.total_cost_usd == pytest.approx(2 * 1.0 * PROVISIONAL_PRICE_PER_SECOND_USD + 2 * PRICE_PER_IMAGE_USD_UNVERIFIED)
 
 
 def test_produce_stops_spending_once_the_hard_cost_ceiling_is_reached(tmp_path):
@@ -370,9 +371,9 @@ def test_produce_stops_spending_once_the_hard_cost_ceiling_is_reached(tmp_path):
     # asserts the THIRD line's real call never happens at all.
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
 
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
     tts = MockTTSClient()
-    # Each clip costs 1.0s * REAL_BILLED_PRICE_PER_SECOND_USD (the real,
+    # Each clip costs 1.0s * PROVISIONAL_PRICE_PER_SECOND_USD (the real,
     # evidenced rate fal.ai actually bills - see docs/SOURCES.md) = $0.20.
     # The ceiling is only ever checked BEFORE a line is attempted (its
     # real cost isn't known until after fal.ai actually runs it), so a
@@ -380,7 +381,7 @@ def test_produce_stops_spending_once_the_hard_cost_ceiling_is_reached(tmp_path):
     # all: the first line still goes through (nothing spent yet to
     # compare, beyond the one real portrait), every line after it must not.
     pipeline = DialoguePipeline(
-        fal_video, tts, str(tmp_path), image_client=MockImageClient(), max_cost_usd=0.05
+        fal_video, tts, str(tmp_path), image_client=MockReplicateImageClient(), max_cost_usd=0.05
     )
     screenplay = DialogueScreenplay(
         title="Dinner",
@@ -398,7 +399,7 @@ def test_produce_stops_spending_once_the_hard_cost_ceiling_is_reached(tmp_path):
     assert len(fal_video.calls) == 1
     assert len(produced.clips) == 1
     assert [l.index for l in produced.skipped_lines] == [1, 2]
-    assert produced.total_cost_usd == pytest.approx(REAL_BILLED_PRICE_PER_SECOND_USD + PRICE_PER_MEGAPIXEL_USD)
+    assert produced.total_cost_usd == pytest.approx(PROVISIONAL_PRICE_PER_SECOND_USD + PRICE_PER_IMAGE_USD_UNVERIFIED)
 
 
 @pytest.mark.skipif(not _ARABIC_FONT_AVAILABLE, reason="fonts-noto-core not installed on this machine - Dockerfile installs it for the real deployment")
@@ -414,10 +415,10 @@ def test_produce_still_renders_a_free_caption_line_after_the_cost_ceiling_is_rea
     # LATER $0 caption line render, not be silently dropped with it.
     portrait_bytes = _real_jpeg_bytes(str(tmp_path / "portrait.jpg"))
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
     pipeline = DialoguePipeline(
         fal_video, MockTTSClient(), str(tmp_path),
-        image_client=MockImageClient(scripted_bytes=portrait_bytes), max_cost_usd=0.05,
+        image_client=MockReplicateImageClient(scripted_bytes=portrait_bytes), max_cost_usd=0.05,
     )
     screenplay = DialogueScreenplay(
         title="Dinner", premise="p",
@@ -444,9 +445,9 @@ def test_produce_generates_and_uses_a_real_portrait_for_a_character_with_appeara
     # in the actual fal.ai video call.
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
 
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
     tts = MockTTSClient()
-    image_client = MockImageClient(scripted_bytes=b"real-generated-portrait-bytes")
+    image_client = MockReplicateImageClient(scripted_bytes=b"real-generated-portrait-bytes")
     pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=image_client)
     screenplay = DialogueScreenplay(
         title="Dinner",
@@ -460,16 +461,16 @@ def test_produce_generates_and_uses_a_real_portrait_for_a_character_with_appeara
     assert image_client.calls == ["photorealistic portrait photo of curly dark hair, slender build" + PORTRAIT_STYLE_SUFFIX]
     sent_image_b64 = fal_video.calls[0]["image_data_uri"].split(",", 1)[1]
     assert base64.b64decode(sent_image_b64) == b"real-generated-portrait-bytes"
-    assert produced.portrait_cost_usd == pytest.approx(PRICE_PER_MEGAPIXEL_USD)
-    assert produced.total_cost_usd == pytest.approx(REAL_BILLED_PRICE_PER_SECOND_USD + PRICE_PER_MEGAPIXEL_USD)
+    assert produced.portrait_cost_usd == pytest.approx(PRICE_PER_IMAGE_USD_UNVERIFIED)
+    assert produced.total_cost_usd == pytest.approx(PROVISIONAL_PRICE_PER_SECOND_USD + PRICE_PER_IMAGE_USD_UNVERIFIED)
 
 
 def test_produce_reuses_the_cached_portrait_without_regenerating_on_a_second_call(tmp_path):
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
 
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
     tts = MockTTSClient()
-    image_client = MockImageClient()
+    image_client = MockReplicateImageClient()
     pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=image_client)
     screenplay = DialogueScreenplay(
         title="Dinner", premise="p",
@@ -492,8 +493,8 @@ def test_save_character_photo_is_picked_up_as_a_cache_hit_with_zero_real_cost(tm
     # a real screenplay for this exact character and asserting the
     # image client is never called and the real cost is $0.
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
-    image_client = MockImageClient()
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
+    image_client = MockReplicateImageClient()
     pipeline = DialoguePipeline(fal_video, MockTTSClient(), str(tmp_path), image_client=image_client)
     screenplay = DialogueScreenplay(
         title="Dinner", premise="p",
@@ -514,7 +515,7 @@ def test_save_character_photo_is_picked_up_as_a_cache_hit_with_zero_real_cost(tm
 
 
 def test_save_character_photo_overwrites_an_existing_cached_photo(tmp_path):
-    pipeline = DialoguePipeline(MockFalVideoClient(), MockTTSClient(), str(tmp_path), image_client=MockImageClient())
+    pipeline = DialoguePipeline(MockReplicateVideoClient(), MockTTSClient(), str(tmp_path), image_client=MockReplicateImageClient())
 
     first_path = pipeline.save_character_photo("Dinner", "A", b"old-photo")
     second_path = pipeline.save_character_photo("Dinner", "A", b"new-photo")
@@ -527,14 +528,14 @@ def test_save_character_photo_overwrites_an_existing_cached_photo(tmp_path):
 def test_produce_portrait_generation_respects_the_hard_cost_ceiling(tmp_path):
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
 
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
-    image_client = MockImageClient()
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
+    image_client = MockReplicateImageClient()
     # The ceiling allows the FIRST portrait through (nothing spent yet to
     # compare against) but must block the second real portrait call -
     # same "checked before, not after" principle as the per-line ceiling.
     pipeline = DialoguePipeline(
         fal_video, MockTTSClient(), str(tmp_path),
-        image_client=image_client, max_cost_usd=PRICE_PER_MEGAPIXEL_USD / 2,
+        image_client=image_client, max_cost_usd=PRICE_PER_IMAGE_USD_UNVERIFIED / 2,
     )
     screenplay = DialogueScreenplay(
         title="Dinner", premise="p",
@@ -565,9 +566,9 @@ def test_produce_renders_a_spoken_false_line_as_a_zero_cost_caption(tmp_path):
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
     portrait_bytes = _real_jpeg_bytes(str(tmp_path / "portrait.jpg"))
 
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
     tts = MockTTSClient()
-    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockImageClient(scripted_bytes=portrait_bytes))
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockReplicateImageClient(scripted_bytes=portrait_bytes))
     screenplay = DialogueScreenplay(
         title="Dinner",
         premise="p",
@@ -598,7 +599,7 @@ def test_produce_renders_a_spoken_false_line_as_a_zero_cost_caption(tmp_path):
     assert float(probe.stdout.strip()) >= 2.0  # CAPTION_MIN_SECONDS floor for a short line
     # The one spoken line's real cost, plus both characters' real portraits
     # (B needs one too, to appear in the caption's shared group photo).
-    assert produced.total_cost_usd == pytest.approx(REAL_BILLED_PRICE_PER_SECOND_USD + 2 * PRICE_PER_MEGAPIXEL_USD)
+    assert produced.total_cost_usd == pytest.approx(PROVISIONAL_PRICE_PER_SECOND_USD + 2 * PRICE_PER_IMAGE_USD_UNVERIFIED)
 
 
 @pytest.mark.skipif(not _ARABIC_FONT_AVAILABLE, reason="fonts-noto-core not installed on this machine - Dockerfile installs it for the real deployment")
@@ -609,8 +610,8 @@ def test_produce_captions_a_line_even_when_its_own_character_has_no_photo(tmp_pa
     # character's portrait failed, as long as at least one other
     # captioned character's photo is available to show.
     portrait_bytes = _real_jpeg_bytes(str(tmp_path / "portrait.jpg"))
-    fal_video = MockFalVideoClient()
-    pipeline = DialoguePipeline(fal_video, MockTTSClient(), str(tmp_path), image_client=MockImageClient(scripted_bytes=portrait_bytes))
+    fal_video = MockReplicateVideoClient()
+    pipeline = DialoguePipeline(fal_video, MockTTSClient(), str(tmp_path), image_client=MockReplicateImageClient(scripted_bytes=portrait_bytes))
     screenplay = DialogueScreenplay(
         title="Dinner", premise="p",
         characters=[
@@ -632,7 +633,7 @@ def test_produce_captions_a_line_even_when_its_own_character_has_no_photo(tmp_pa
 
 @pytest.mark.skipif(not _ARABIC_FONT_AVAILABLE, reason="fonts-noto-core not installed on this machine - Dockerfile installs it for the real deployment")
 def test_produce_fails_every_caption_when_no_captioned_character_has_a_photo(tmp_path):
-    fal_video = MockFalVideoClient()
+    fal_video = MockReplicateVideoClient()
     pipeline = DialoguePipeline(fal_video, MockTTSClient(), str(tmp_path))  # no image_client at all
     screenplay = DialogueScreenplay(
         title="Dinner", premise="p",
@@ -654,8 +655,8 @@ def test_produce_reports_a_real_caption_rendering_failure_without_a_billed_prefi
     # uses for a billed-then-failed line.
     portrait_bytes = _real_jpeg_bytes(str(tmp_path / "portrait.jpg"))
     pipeline = DialoguePipeline(
-        MockFalVideoClient(), MockTTSClient(), str(tmp_path),
-        image_client=MockImageClient(scripted_bytes=portrait_bytes),
+        MockReplicateVideoClient(), MockTTSClient(), str(tmp_path),
+        image_client=MockReplicateImageClient(scripted_bytes=portrait_bytes),
     )
     screenplay = DialogueScreenplay(
         title="Dinner", premise="p",
@@ -696,7 +697,7 @@ def test_produce_does_not_reuse_a_stale_caption_group_photo_after_the_caption_ro
     # wrong faces shown in every caption frame, with no error anywhere.
     portrait_a = _real_jpeg_bytes(str(tmp_path / "a.jpg"))
     pipeline_a = DialoguePipeline(
-        MockFalVideoClient(), MockTTSClient(), str(tmp_path), image_client=MockImageClient(scripted_bytes=portrait_a)
+        MockReplicateVideoClient(), MockTTSClient(), str(tmp_path), image_client=MockReplicateImageClient(scripted_bytes=portrait_a)
     )
     screenplay_a = DialogueScreenplay(
         title="Same Title", premise="p",
@@ -707,7 +708,7 @@ def test_produce_does_not_reuse_a_stale_caption_group_photo_after_the_caption_ro
 
     portrait_b = _real_jpeg_bytes(str(tmp_path / "b.jpg"))
     pipeline_b = DialoguePipeline(
-        MockFalVideoClient(), MockTTSClient(), str(tmp_path), image_client=MockImageClient(scripted_bytes=portrait_b)
+        MockReplicateVideoClient(), MockTTSClient(), str(tmp_path), image_client=MockReplicateImageClient(scripted_bytes=portrait_b)
     )
     screenplay_b = DialogueScreenplay(
         title="Same Title", premise="p",  # same title -> same slug, like a real retry after /edit
@@ -724,7 +725,7 @@ def test_produce_does_not_reuse_a_stale_caption_group_photo_after_the_caption_ro
 
 
 def test_produce_rejects_a_line_whose_speaker_is_not_in_the_cast(tmp_path):
-    pipeline = DialoguePipeline(MockFalVideoClient(), MockTTSClient(), str(tmp_path))
+    pipeline = DialoguePipeline(MockReplicateVideoClient(), MockTTSClient(), str(tmp_path))
     screenplay = DialogueScreenplay(
         title="T", premise="p", characters=[],
         lines=[DialogueLine(index=0, character="Ghost", line="boo", action="")],
@@ -746,9 +747,9 @@ def test_produce_keeps_already_paid_for_clips_when_a_later_line_fails(tmp_path):
     # clips survive.
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
 
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes, fail_at_calls=frozenset({1}))
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes, fail_at_calls=frozenset({1}))
     tts = MockTTSClient()
-    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockImageClient())
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockReplicateImageClient())
     screenplay = DialogueScreenplay(
         title="T",
         premise="p",
@@ -774,7 +775,7 @@ def test_produce_keeps_already_paid_for_clips_when_a_later_line_fails(tmp_path):
     # the real money already spent on the surviving clips (plus the one
     # real portrait, generated once and reused for all three lines) must
     # still be reported, not thrown away along with the failed one
-    assert produced.total_cost_usd == pytest.approx(2 * 1.0 * REAL_BILLED_PRICE_PER_SECOND_USD + PRICE_PER_MEGAPIXEL_USD)
+    assert produced.total_cost_usd == pytest.approx(2 * 1.0 * PROVISIONAL_PRICE_PER_SECOND_USD + PRICE_PER_IMAGE_USD_UNVERIFIED)
 
 
 def test_produce_reports_when_a_line_was_billed_by_fal_ai_before_the_failure(tmp_path, monkeypatch):
@@ -795,9 +796,9 @@ def test_produce_reports_when_a_line_was_billed_by_fal_ai_before_the_failure(tmp
     # The clip must now be recovered and delivered regardless.
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
 
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
     tts = MockTTSClient()
-    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockImageClient())
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockReplicateImageClient())
     screenplay = DialogueScreenplay(
         title="T", premise="p",
         characters=[Character(name="A", appearance="a")],
@@ -836,9 +837,9 @@ def test_produce_falls_back_to_the_audio_duration_when_only_the_video_probe_fail
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
     mp3_bytes = _real_mp3_bytes(str(tmp_path / "ref_audio.mp3"), duration_seconds=1.0)
 
-    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
     tts = MockTTSClient(scripted_bytes=mp3_bytes)
-    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockImageClient())
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockReplicateImageClient())
     screenplay = DialogueScreenplay(
         title="T", premise="p",
         characters=[Character(name="A", appearance="a")],
