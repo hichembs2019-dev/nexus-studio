@@ -151,6 +151,17 @@ class DialoguePipeline:
         # whichever client is actually wired in must now be passed
         # explicitly by the caller (src/app.py) - never assumed here.
         price_per_second_usd: float = REAL_BILLED_PRICE_PER_SECOND_USD,
+        # Owner's instruction, 2026-10-21 ("قم بالتنظيف ... كثرة الكودات
+        # اصبحت تتداخل في بعضها" - clean up, too much code has started
+        # to overlap): found by that same review - the portrait cost
+        # below had the IDENTICAL defect just fixed for video seconds
+        # above, just never caught: hard-coded to fal.ai's own
+        # PRICE_PER_MEGAPIXEL_USD regardless of which image_client is
+        # actually wired in. The two placeholder values happen to be
+        # equal right now (both 0.025), which is exactly why this went
+        # unnoticed - a real, independent Replicate image-price test
+        # would have silently diverged the moment the numbers differed.
+        price_per_image_usd: float = PRICE_PER_MEGAPIXEL_USD,
     ):
         self._fal_video = fal_video
         self._tts = tts
@@ -158,6 +169,7 @@ class DialoguePipeline:
         self._tts_lang = tts_lang
         self._resolution = resolution
         self._price_per_second_usd = price_per_second_usd
+        self._price_per_image_usd = price_per_image_usd
         # Owner's standing instruction, 2026-10-21 ("احذف الستة صور و قلت
         # التوليد حسب القصة"): None here means production simply cannot
         # generate any real photo at all - every speaking character's
@@ -453,7 +465,13 @@ class DialoguePipeline:
         if os.path.isfile(cache_path):
             return cache_path, 0.0, None
         if self._image_client is None:
-            return None, 0.0, "لا يوجد اتصال حقيقي بمولّد الصور (FAL_KEY غير مُهيَّأ)"
+            # Owner's instruction, 2026-10-21 ("قم بالتنظيف"): used to
+            # name FAL_KEY specifically, which became wrong and
+            # misleading the moment Replicate became the real default
+            # image provider - this message is shown to the owner
+            # directly and must name the real missing credential, not a
+            # stale one from before the provider could differ.
+            return None, 0.0, "لا يوجد اتصال حقيقي بمولّد الصور (FAL_KEY أو REPLICATE_API_TOKEN غير مُهيَّأ)"
         if not character.appearance:
             return None, 0.0, "لا يوجد وصف لهذه الشخصية لتوليد صورة حقيقية منه"
         try:
@@ -462,7 +480,7 @@ class DialoguePipeline:
             image_bytes = self._image_client.generate_image(prompt)
             with open(cache_path, "wb") as f:
                 f.write(image_bytes)
-            return cache_path, PRICE_PER_MEGAPIXEL_USD, None
+            return cache_path, self._price_per_image_usd, None
         except Exception as exc:
             return None, 0.0, str(exc)
 

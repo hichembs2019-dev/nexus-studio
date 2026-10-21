@@ -66,6 +66,24 @@ def test_new_cost_estimate_uses_the_real_price_per_second_explicitly_passed_in()
     assert f"${expected_cost:.2f}" in reply.text
 
 
+def test_new_cost_estimate_uses_the_real_price_per_image_explicitly_passed_in():
+    # Owner's cleanup instruction, 2026-10-21: the portrait component of
+    # the estimate had the identical defect as price_per_second_usd
+    # above - see dialogue_pipeline.py's own mirrored test. 0.09 is
+    # deliberately distinct from every real constant in the codebase.
+    cast = _cast_reply(("فوزية", "female"))
+    lines = _lines_reply(("فوزية", "beat one", ""), ("فوزية", "beat two", ""))
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast, lines])
+    conversation = BotConversation(
+        DialogueWriterAgent(reasoning), PublishingAgent({}), price_per_image_usd=0.09
+    )
+
+    reply = conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} idea")
+
+    expected_cost = 2 * ESTIMATED_SECONDS_PER_LINE * REAL_BILLED_PRICE_PER_SECOND_USD + 1 * 0.09
+    assert f"${expected_cost:.2f}" in reply.text
+
+
 def test_new_cost_estimate_includes_real_portrait_generation_cost():
     # Real bug found by code review, 2026-10-21: the estimate shown
     # before Approve only ever counted spoken-line video cost - never

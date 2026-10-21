@@ -11,8 +11,8 @@ from .agents.publisher import PublishingAgent
 from .bot.conversation import BotConversation
 from .config import Settings
 from .integrations.fal_video_client import REAL_BILLED_PRICE_PER_SECOND_USD, FalVideoClient, MockFalVideoClient, RealFalVideoClient
-from .integrations.image_client import MockImageClient, RealFalImageClient
-from .integrations.replicate_image_client import RealReplicateImageClient
+from .integrations.image_client import PRICE_PER_MEGAPIXEL_USD, MockImageClient, RealFalImageClient
+from .integrations.replicate_image_client import PRICE_PER_IMAGE_USD_UNVERIFIED, RealReplicateImageClient
 from .integrations.replicate_video_client import PROVISIONAL_PRICE_PER_SECOND_USD, RealReplicateVideoClient
 from .integrations.publishing_client import MockPublishingClient, PublishingClient, RealYouTubeClient
 from .integrations.reasoning_client import (
@@ -111,6 +111,9 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
     # own pre-Approve estimate always has a real rate to use, even on a
     # mock/unconfigured build where no real pipeline exists at all.
     price_per_second_usd: float = REAL_BILLED_PRICE_PER_SECOND_USD
+    # Same reasoning as price_per_second_usd above, for the portrait
+    # cost component (owner's cleanup instruction, 2026-10-21).
+    price_per_image_usd: float = PRICE_PER_MEGAPIXEL_USD
     if not force_mocks and chosen_video_provider is not None and settings.azure_speech_configured:
         # Owner's standing instruction, 2026-10-21 ("لا تضع السراق ...
         # احذفهم من الكود" - don't put the thieves [fal.ai] in, remove
@@ -124,12 +127,14 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
             fal_video = RealReplicateVideoClient(settings.replicate_api_token)
             image_client = RealReplicateImageClient(settings.replicate_api_token)
             price_per_second_usd = PROVISIONAL_PRICE_PER_SECOND_USD
+            price_per_image_usd = PRICE_PER_IMAGE_USD_UNVERIFIED
             logger.info("Real video provider: Replicate (wan-video/wan-2.2-s2v)")
             logger.info("Real image provider: Replicate (black-forest-labs/flux-dev)")
         else:
             fal_video = RealFalVideoClient(settings.fal_key)
             image_client = RealFalImageClient(settings.fal_key)
             price_per_second_usd = REAL_BILLED_PRICE_PER_SECOND_USD
+            price_per_image_usd = PRICE_PER_MEGAPIXEL_USD
             logger.info("Real video provider: fal.ai (fal-ai/wan/v2.2-14b/speech-to-video)")
             logger.info("Real image provider: fal.ai (fal-ai/flux/dev)")
         dialogue_writer = DialogueWriterAgent(reasoning)
@@ -139,6 +144,7 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
             max_cost_usd=settings.max_episode_cost_usd,
             image_client=image_client,
             price_per_second_usd=price_per_second_usd,
+            price_per_image_usd=price_per_image_usd,
         )
     elif force_mocks:
         fal_video = MockFalVideoClient()
@@ -171,7 +177,10 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
             publishing_clients["youtube"] = MockPublishingClient()
     publisher = PublishingAgent(publishing_clients)
     conversation = (
-        BotConversation(dialogue_writer, publisher, price_per_second_usd=price_per_second_usd)
+        BotConversation(
+            dialogue_writer, publisher,
+            price_per_second_usd=price_per_second_usd, price_per_image_usd=price_per_image_usd,
+        )
         if dialogue_writer is not None
         else None
     )

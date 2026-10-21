@@ -128,7 +128,7 @@ def test_produce_fails_every_line_when_no_image_client_is_configured(tmp_path):
     produced = pipeline.produce(screenplay)
 
     assert produced.portrait_cost_usd == 0.0
-    assert produced.portrait_failures == [("A", "لا يوجد اتصال حقيقي بمولّد الصور (FAL_KEY غير مُهيَّأ)")]
+    assert produced.portrait_failures == [("A", "لا يوجد اتصال حقيقي بمولّد الصور (FAL_KEY أو REPLICATE_API_TOKEN غير مُهيَّأ)")]
     assert len(produced.clips) == 0
     assert len(fal_video.calls) == 0  # never even reached fal.ai - no photo to send it
     assert len(produced.failed_lines) == 1
@@ -243,6 +243,30 @@ def test_produce_uses_the_real_price_per_second_explicitly_passed_in(tmp_path):
     produced = pipeline.produce(screenplay)
 
     assert produced.clips[0].cost_usd == pytest.approx(1.0 * 0.05)
+
+
+def test_produce_uses_the_real_price_per_image_explicitly_passed_in(tmp_path):
+    # Owner's cleanup instruction, 2026-10-21 ("قم بالتنظيف ... كثرة
+    # الكودات اصبحت تتداخل في بعضها"): found by that same review - the
+    # portrait cost had the IDENTICAL defect as price_per_second_usd
+    # above (hard-coded to fal.ai's PRICE_PER_MEGAPIXEL_USD), just never
+    # caught because both placeholder values happened to equal 0.025.
+    # 0.09 here is deliberately distinct from every real constant in the
+    # codebase so this can't pass by coincidence.
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    pipeline = DialoguePipeline(
+        fal_video, MockTTSClient(), str(tmp_path), image_client=MockImageClient(), price_per_image_usd=0.09
+    )
+    screenplay = DialogueScreenplay(
+        title="T", premise="p",
+        characters=[Character(name="A", appearance="a")],
+        lines=[DialogueLine(index=0, character="A", line="one", action="a1")],
+    )
+
+    produced = pipeline.produce(screenplay)
+
+    assert produced.portrait_cost_usd == pytest.approx(0.09)
 
 
 def test_produce_falls_back_to_a_default_prompt_when_action_is_empty(tmp_path):

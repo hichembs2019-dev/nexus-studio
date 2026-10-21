@@ -148,10 +148,18 @@ class BotConversation:
         # own price_per_second_usd) must be passed explicitly - never
         # assumed here.
         price_per_second_usd: float = REAL_BILLED_PRICE_PER_SECOND_USD,
+        # Owner's instruction, 2026-10-21 ("قم بالتنظيف ... كثرة الكودات
+        # اصبحت تتداخل في بعضها"): same defect as price_per_second_usd
+        # above, just for the portrait cost component of the estimate -
+        # _format_screenplay used to hard-code fal.ai's own
+        # PRICE_PER_MEGAPIXEL_USD regardless of which real image
+        # provider DialoguePipeline is actually wired to.
+        price_per_image_usd: float = PRICE_PER_MEGAPIXEL_USD,
     ):
         self._dialogue_writer = dialogue_writer
         self._publisher = publisher
         self._price_per_second_usd = price_per_second_usd
+        self._price_per_image_usd = price_per_image_usd
         self._states: dict[str, _ChatState] = {}
 
     def handle_plain_text(self, chat_id: str, text: str) -> None:
@@ -653,7 +661,7 @@ class BotConversation:
         # fal.ai-specific constant. See __init__'s own comment above.
         est_cost = (
             spoken_count * ESTIMATED_SECONDS_PER_LINE * self._price_per_second_usd
-            + appearing_character_count * PRICE_PER_MEGAPIXEL_USD
+            + appearing_character_count * self._price_per_image_usd
         )
         lines.append(f"(تكلفة تقديرية تقريبية: ${est_cost:.2f} - التكلفة الحقيقية تُحسب بعد التوليد الفعلي)")
         lines.append("لتعديل سطر أو عدة أسطر دفعة واحدة، كل تعديل في سطر منفصل:\n/edit\n<الرقم> <الحوار الجديد>\n<رقم آخر> <حوار آخر>")
