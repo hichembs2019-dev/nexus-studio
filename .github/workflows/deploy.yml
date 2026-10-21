@@ -64,3 +64,16 @@ jobs:
                 echo "$k: EMPTY or MISSING"
               fi
             done
+            # Owner's real, live concern, 2026-10-21 ("لكن في رصيدي اقل
+            # من 8 دولار" - my real fal.ai balance is under $8): produce()'s
+            # own real-spend ceiling (MAX_EPISODE_COST_USD) defaults to
+            # $10.0 in config.py if unset - HIGHER than his real balance.
+            # This is not a secret/credential, just a number - printed in
+            # full, unlike the keys above, so it can be checked against a
+            # real account balance before ever pressing Approve.
+            echo "=== real spend ceiling (MAX_EPISODE_COST_USD) ==="
+            if grep -q "^MAX_EPISODE_COST_USD=..*" .env 2>/dev/null; then
+              grep "^MAX_EPISODE_COST_USD=" .env
+            else
+              echo "MAX_EPISODE_COST_USD: not set in .env - config.py's own default (10.0) is in effect"
+            fi
