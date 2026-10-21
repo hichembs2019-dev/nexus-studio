@@ -313,10 +313,48 @@ class DialoguePipeline:
                 with open(clip_path, "wb") as f:
                     f.write(clip_bytes)
 
-                duration = _ffprobe_duration(clip_path)
-                cost = duration * PRICE_PER_SECOND_USD[self._resolution]
-                clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
-                spent_so_far += cost
+                # Owner's standing instruction, 2026-10-21 ("لا يجب ان
+                # يفشل شيء لاني ادفع مالا عند الفشل" - nothing may fail,
+                # because I pay money when it fails): by this point the
+                # real video was already generated and billed by fal.ai,
+                # and its real bytes are genuinely sitting on disk at
+                # clip_path - only measuring its duration (to compute its
+                # real cost) is left. If THAT alone fails (a corrupt
+                # response, a transient ffprobe glitch), the old code
+                # discarded this real, paid, already-downloaded file
+                # completely - the owner would have paid fal.ai for a
+                # video that exists on the server and never reaches them,
+                # not even as a path to retrieve manually. The real audio
+                # file this video is lip-synced to was written successfully
+                # moments earlier and is lip-synced 1:1 to the video, so
+                # probing IT is a real, measured (not guessed) stand-in
+                # for the video's own duration when the video probe
+                # itself fails.
+                try:
+                    duration = _ffprobe_duration(clip_path)
+                    cost = duration * PRICE_PER_SECOND_USD[self._resolution]
+                    clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
+                    spent_so_far += cost
+                except Exception as probe_exc:
+                    try:
+                        duration = _ffprobe_duration(audio_path)
+                        cost = duration * PRICE_PER_SECOND_USD[self._resolution]
+                        clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
+                        spent_so_far += cost
+                    except Exception:
+                        # Could not measure either real file - the real
+                        # paid video is still delivered rather than
+                        # discarded (the whole point of this fix), but its
+                        # exact real cost genuinely cannot be measured, so
+                        # it is reported as unmeasured (not guessed with an
+                        # invented number) and counted as $0 in the total -
+                        # a safety-margin understatement, never an
+                        # overstatement, with the real reason surfaced so
+                        # the owner can check fal.ai's own dashboard.
+                        clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=0.0))
+                        failed_lines.append(
+                            (line, f"[تم صرف مال حقيقي وحُفظ الفيديو الحقيقي فعليًا - مرفق أدناه - لكن تعذّر قياس مدته الفعلية، فلم تُحتسب تكلفته في المجموع؛ راجع لوحة fal.ai للتكلفة الدقيقة] {probe_exc}")
+                        )
             except Exception as exc:
                 message = str(exc)
                 if billed:

@@ -32,6 +32,19 @@ def _silent_mp4(path: str, duration_seconds: float) -> bytes:
         return f.read()
 
 
+def _real_mp3_bytes(path: str, duration_seconds: float = 1.0) -> bytes:
+    # The video-probe-fails-but-audio-probe-succeeds recovery path reads
+    # the real MP3 ffprobe needs to measure - MockTTSClient's own default
+    # scripted bytes (b"fake-mp3-bytes") are plain text, not real audio,
+    # which ffprobe correctly refuses to read.
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency=440:duration={duration_seconds}", path],
+        capture_output=True, check=True,
+    )
+    with open(path, "rb") as f:
+        return f.read()
+
+
 def _real_jpeg_bytes(path: str) -> bytes:
     # The caption group photo is built with a real ffmpeg call
     # (_build_caption_group_image) over whatever bytes a generated
@@ -637,6 +650,14 @@ def test_produce_reports_when_a_line_was_billed_by_fal_ai_before_the_failure(tmp
     # ffprobe) failed. A test that only checks a FalVideoError-style
     # message would miss this - it has to check the real billing note
     # actually appears when the paid call itself succeeded.
+    #
+    # Real bug found by code review, 2026-10-21 ("لا يجب ان يفشل شيء
+    # لاني ادفع مالا عند الفشل" - nothing may fail, because I pay money
+    # when it fails): when ffprobe ALONE fails on an already-paid,
+    # already-downloaded real video, discarding the clip entirely meant
+    # the owner paid fal.ai for a video that genuinely exists on the
+    # server and never reached them - not even as a file to retrieve.
+    # The clip must now be recovered and delivered regardless.
     clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
 
     fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
@@ -657,8 +678,51 @@ def test_produce_reports_when_a_line_was_billed_by_fal_ai_before_the_failure(tmp
 
     produced = pipeline.produce(screenplay)
 
-    assert len(produced.clips) == 0
+    # The real, already-paid video is still delivered - never discarded
+    # just because its exact duration could not be measured.
+    assert len(produced.clips) == 1
+    assert os.path.exists(produced.clips[0].local_path)
+    assert produced.clips[0].cost_usd == 0.0  # genuinely unmeasured, never guessed
     assert len(produced.failed_lines) == 1
     _, error_message = produced.failed_lines[0]
     assert "تم صرف مال حقيقي" in error_message
+    assert "مرفق أدناه" in error_message  # must tell the owner the real file is still attached
     assert len(fal_video.calls) == 1  # the real, billed call did happen
+
+
+def test_produce_falls_back_to_the_audio_duration_when_only_the_video_probe_fails(tmp_path, monkeypatch):
+    # Owner's standing instruction, 2026-10-21 ("لا يجب ان يفشل شيء
+    # لاني ادفع مالا عند الفشل"): the smarter recovery path - when only
+    # the VIDEO probe fails (a corrupt/partial response from fal.ai) but
+    # the real audio file (written successfully moments earlier, and
+    # lip-synced 1:1 to the video) can still be measured, its real,
+    # measured duration is used for the real cost - not a guess, not a
+    # silent $0.
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    mp3_bytes = _real_mp3_bytes(str(tmp_path / "ref_audio.mp3"), duration_seconds=1.0)
+
+    fal_video = MockFalVideoClient(scripted_bytes=clip_bytes)
+    tts = MockTTSClient(scripted_bytes=mp3_bytes)
+    pipeline = DialoguePipeline(fal_video, tts, str(tmp_path), image_client=MockImageClient())
+    screenplay = DialogueScreenplay(
+        title="T", premise="p",
+        characters=[Character(name="A", appearance="a")],
+        lines=[DialogueLine(index=0, character="A", line="one", action="a1")],
+    )
+
+    import src.workflows.dialogue_pipeline as dialogue_pipeline_module
+
+    real_probe = dialogue_pipeline_module._ffprobe_duration
+
+    def _probe_fails_only_for_video(path):
+        if path.endswith(".mp4"):
+            raise RuntimeError("corrupt video response")
+        return real_probe(path)
+
+    monkeypatch.setattr(dialogue_pipeline_module, "_ffprobe_duration", _probe_fails_only_for_video)
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(produced.clips) == 1
+    assert produced.clips[0].cost_usd > 0.0  # a real, measured cost - not the $0 last-resort case
+    assert len(produced.failed_lines) == 0  # fully recovered, nothing left to report as failed

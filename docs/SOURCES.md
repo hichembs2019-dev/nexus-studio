@@ -1069,3 +1069,16 @@ Not independently unit-tested - `runner.py` is explicitly documented (its own mo
 **Fixed**: `_parse_cast()` now checks for duplicate names and raises `DialogueWriterError` naming them, before any screenplay is built or any line-writing call is made.
 
 Covered by `tests/test_dialogue_writer.py::test_parse_cast_rejects_two_characters_with_the_same_name`, asserting the error names the duplicated character and that the lines-writing call is never reached (no real cost risked on a screenplay that was always going to be built wrong). Mutation-tested: removed the check, confirmed the test fails (the mock reasoning client is exhausted trying to serve a lines-writing call that should never have happened), restored, confirmed the full suite green.
+
+## A real, already-paid video could be stranded and lost if only its local duration measurement failed (2026-10-21)
+
+Real, forceful instruction ("لا يجب ان يفشل شيء لاني ادفع مالا عند الفشل" - nothing may fail, because I pay money when it fails): most failure paths in this pipeline already cost $0 (a bad screenplay, a missing photo, a fal.ai job that itself errors or times out - confirmed live earlier this project that a timed-out fal.ai job bills $0.000). But one narrow path did not: once `generate_speech_to_video()` itself succeeds, fal.ai has already billed for real, completed work - the real video bytes are written to disk successfully - and only measuring that file's duration (`_ffprobe_duration`, needed to compute its real cost) was left. If THAT alone failed (a corrupt or partial response from fal.ai, a transient ffprobe error), the old code discarded the clip entirely: the real, paid-for, already-downloaded video file sat on the server, and the owner was told only that the line failed - never given the file, not even a path to it.
+
+**Fixed**: `produce()` now recovers the clip instead of discarding it, in two steps:
+1. Try to measure the real video's own duration (unchanged, the normal path).
+2. If that fails, try measuring the real audio file instead - it was already written successfully moments earlier, and the video is lip-synced 1:1 to it, so its duration is a real, measured stand-in, not a guess.
+3. Only if **both** real files fail to measure does the clip get delivered with `cost_usd=0.0` (a safety-margin understatement, never an invented number) and a clear note telling the owner the real paid file is still attached and to check fal.ai's own dashboard for the exact charge.
+
+In every one of these outcomes the real video file is still delivered to the owner - it is never silently lost again.
+
+Covered by two tests in `tests/test_dialogue_pipeline.py`: `test_produce_falls_back_to_the_audio_duration_when_only_the_video_probe_fails` (video probe fails, audio probe succeeds, real measured cost used) and the updated `test_produce_reports_when_a_line_was_billed_by_fal_ai_before_the_failure` (both probes fail, clip still delivered at `$0.00`, failure note explains why). Mutation-tested: reverted to the old discard-on-probe-failure behavior, confirmed both tests fail for the real reason (`len(produced.clips) == 0` instead of 1 - the real paid file genuinely discarded), restored, confirmed the full 122-test suite green.
