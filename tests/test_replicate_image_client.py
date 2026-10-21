@@ -131,6 +131,60 @@ def test_generate_image_raises_on_a_real_timeout(monkeypatch):
         client.generate_image("p")
 
 
+def test_generate_image_retries_a_real_429_and_honors_the_real_retry_after(monkeypatch):
+    # Real incident, 2026-10-21: a real production run failed EVERY
+    # character's portrait with a real 429 from Replicate - "Your rate
+    # limit for creating predictions is reduced to 6 requests per minute
+    # ... while you have less than $5.0 in credit" - and the client had
+    # no retry logic at all. The 429 body itself names the real wait
+    # (retry_after) - this must be read and slept, not guessed.
+    post_calls = []
+    sleep_calls = []
+
+    def fake_post(url, *, headers, json, timeout):
+        post_calls.append(1)
+        if len(post_calls) == 1:
+            return _FakeResponse(status_code=429, json_data={"detail": "throttled", "retry_after": 7})
+        return _FakeResponse(status_code=201, json_data={"id": "p", "urls": {"get": "https://api.replicate.com/v1/predictions/p"}})
+
+    def fake_get(url, *, headers=None, timeout=30):
+        if url.endswith("/p"):
+            return _FakeResponse(status_code=200, json_data={"status": "succeeded", "output": "https://real.cdn/portrait.jpg"})
+        return _FakeResponse(status_code=200, content=b"real-jpeg-bytes")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setattr("time.sleep", lambda s: sleep_calls.append(s))
+
+    client = RealReplicateImageClient("key")
+    data = client.generate_image("p")
+
+    assert data == b"real-jpeg-bytes"
+    assert len(post_calls) == 2  # one 429, one real success - retried exactly once
+    assert sleep_calls == [7]  # slept the REAL retry_after the API gave, not a guess
+
+
+def test_generate_image_gives_up_after_max_retries_on_persistent_429s(monkeypatch):
+    post_calls = []
+
+    def fake_post(url, *, headers, json, timeout):
+        post_calls.append(1)
+        return _FakeResponse(status_code=429, json_data={"detail": "throttled", "retry_after": 1})
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    client = RealReplicateImageClient("key")
+    with pytest.raises(ReplicateImageError, match="429"):
+        client.generate_image("p")
+
+    assert len(post_calls) == 5  # MAX_SUBMIT_RETRIES - never retries forever on a genuinely broke account
+
+
 def test_mock_replicate_image_client_records_calls_and_returns_scripted_bytes():
     mock = MockReplicateImageClient(scripted_bytes=b"scripted-portrait")
 

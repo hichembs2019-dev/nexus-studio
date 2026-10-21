@@ -46,9 +46,37 @@ POLL_TIMEOUT_S = 300
 # owner-run test the same way the video price was confirmed.
 PRICE_PER_IMAGE_USD_UNVERIFIED = 0.025
 
+# Real incident, 2026-10-21: a real production run failed EVERY
+# character's portrait with a real 429 from Replicate's own API:
+# "Your rate limit for creating predictions is reduced to 6 requests
+# per minute with a burst of 1 requests while you have less than $5.0
+# in credit." This project's own pre-pass loop (dialogue_pipeline.py)
+# submits one portrait request per speaking character in quick
+# succession - exactly the pattern this real, documented low-credit
+# throttle exists to reject. The 429 response body itself names the
+# real wait (`retry_after`, seconds) - MAX_SUBMIT_RETRIES bounds how
+# many times this is honored before giving up for real, rather than
+# retrying forever on a account that may simply be out of credit.
+MAX_SUBMIT_RETRIES = 5
+
 
 class ReplicateImageError(Exception):
     pass
+
+
+def _post_with_retry(headers: dict, body: dict):
+    import httpx
+
+    for attempt in range(MAX_SUBMIT_RETRIES):
+        resp = httpx.post(ENDPOINT, headers=headers, json=body, timeout=60)
+        if resp.status_code != 429 or attempt == MAX_SUBMIT_RETRIES - 1:
+            return resp
+        try:
+            wait_s = resp.json().get("retry_after", 10)
+        except Exception:
+            wait_s = 10
+        time.sleep(wait_s)
+    return resp  # pragma: no cover - loop always returns above
 
 
 class ReplicateImageClient(ABC):
@@ -68,12 +96,7 @@ class RealReplicateImageClient(ReplicateImageClient):
         import httpx
 
         headers = {"Authorization": f"Bearer {self._api_token}", "Content-Type": "application/json"}
-        submit = httpx.post(
-            ENDPOINT,
-            headers=headers,
-            json={"input": {"prompt": prompt}},
-            timeout=60,
-        )
+        submit = _post_with_retry(headers, {"input": {"prompt": prompt}})
         if submit.status_code >= 400:
             raise ReplicateImageError(f"Replicate image submit failed ({submit.status_code}): {submit.text[:500]}")
         payload = submit.json()

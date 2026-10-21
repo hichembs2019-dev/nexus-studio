@@ -73,9 +73,36 @@ POLL_TIMEOUT_S = 1200
 # a rate that doesn't actually belong to the provider actually running.
 PROVISIONAL_PRICE_PER_SECOND_USD = 0.05
 
+# Real incident, 2026-10-21: a real production run failed every
+# character's PORTRAIT (replicate_image_client.py, the same real 429
+# shape) with Replicate's own documented low-credit throttle: "Your rate
+# limit for creating predictions is reduced to 6 requests per minute
+# with a burst of 1 requests while you have less than $5.0 in credit."
+# This endpoint shares the same account and the same real risk - the
+# dialogue loop submits one speech-to-video request per spoken line in
+# quick succession. The 429 body itself names the real wait
+# (`retry_after`, seconds) - MAX_SUBMIT_RETRIES bounds how many times
+# this is honored before giving up for real.
+MAX_SUBMIT_RETRIES = 5
+
 
 class ReplicateVideoError(Exception):
     pass
+
+
+def _post_with_retry(headers: dict, body: dict):
+    import httpx
+
+    for attempt in range(MAX_SUBMIT_RETRIES):
+        resp = httpx.post(ENDPOINT, headers=headers, json=body, timeout=60)
+        if resp.status_code != 429 or attempt == MAX_SUBMIT_RETRIES - 1:
+            return resp
+        try:
+            wait_s = resp.json().get("retry_after", 10)
+        except Exception:
+            wait_s = 10
+        time.sleep(wait_s)
+    return resp  # pragma: no cover - loop always returns above
 
 
 class ReplicateVideoClient(ABC):
@@ -101,11 +128,8 @@ class RealReplicateVideoClient(ReplicateVideoClient):
         import httpx
 
         headers = {"Authorization": f"Bearer {self._api_token}", "Content-Type": "application/json"}
-        submit = httpx.post(
-            ENDPOINT,
-            headers=headers,
-            json={"input": {"prompt": prompt, "image": image_data_uri, "audio": audio_data_uri}},
-            timeout=60,
+        submit = _post_with_retry(
+            headers, {"input": {"prompt": prompt, "image": image_data_uri, "audio": audio_data_uri}}
         )
         if submit.status_code >= 400:
             raise ReplicateVideoError(f"Replicate submit failed ({submit.status_code}): {submit.text[:500]}")

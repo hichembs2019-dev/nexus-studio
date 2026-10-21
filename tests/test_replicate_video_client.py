@@ -185,6 +185,58 @@ def test_generate_speech_to_video_raises_on_a_real_timeout(monkeypatch):
         client.generate_speech_to_video(prompt="p", image_data_uri="i", audio_data_uri="a")
 
 
+def test_generate_speech_to_video_retries_a_real_429_and_honors_the_real_retry_after(monkeypatch):
+    # Real incident, 2026-10-21: see replicate_image_client.py's own
+    # mirrored test - the identical real low-credit 429 throttle applies
+    # to this endpoint, same account, same real risk from a tight loop
+    # of successive submissions.
+    post_calls = []
+    sleep_calls = []
+
+    def fake_post(url, *, headers, json, timeout):
+        post_calls.append(1)
+        if len(post_calls) == 1:
+            return _FakeResponse(status_code=429, json_data={"detail": "throttled", "retry_after": 7})
+        return _FakeResponse(status_code=201, json_data={"id": "p", "urls": {"get": "https://api.replicate.com/v1/predictions/p"}})
+
+    def fake_get(url, *, headers=None, timeout=30):
+        if url.endswith("/p"):
+            return _FakeResponse(status_code=200, json_data={"status": "succeeded", "output": "https://real.cdn/clip.mp4"})
+        return _FakeResponse(status_code=200, content=b"real-mp4-bytes")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setattr("time.sleep", lambda s: sleep_calls.append(s))
+
+    client = RealReplicateVideoClient("key")
+    data = client.generate_speech_to_video(prompt="p", image_data_uri="i", audio_data_uri="a")
+
+    assert data == b"real-mp4-bytes"
+    assert len(post_calls) == 2
+    assert sleep_calls == [7]
+
+
+def test_generate_speech_to_video_gives_up_after_max_retries_on_persistent_429s(monkeypatch):
+    post_calls = []
+
+    def fake_post(url, *, headers, json, timeout):
+        post_calls.append(1)
+        return _FakeResponse(status_code=429, json_data={"detail": "throttled", "retry_after": 1})
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr("time.sleep", lambda s: None)
+
+    client = RealReplicateVideoClient("key")
+    with pytest.raises(ReplicateVideoError, match="429"):
+        client.generate_speech_to_video(prompt="p", image_data_uri="i", audio_data_uri="a")
+
+    assert len(post_calls) == 5
+
+
 def test_mock_replicate_video_client_records_calls_and_returns_scripted_bytes():
     mock = MockReplicateVideoClient(scripted_bytes=b"scripted-clip")
 

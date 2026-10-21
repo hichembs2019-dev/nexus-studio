@@ -1300,3 +1300,22 @@ The owner sent a real, finished grid of six character portraits (his own real sc
 This is architecturally correct, not a one-off hack: it reuses the SAME cache path the automatic pipeline already checks first, so there is exactly one mechanism deciding "do I need to pay to generate this photo" - not two competing ones. Works identically whichever video/image provider is currently chosen (Replicate or fal.ai), since the cache check in `_resolve_character_photo()` happens before either provider is ever touched.
 
 Covered by `tests/test_dialogue_pipeline.py` (`test_save_character_photo_is_picked_up_as_a_cache_hit_with_zero_real_cost` - produces a real screenplay for the exact character after saving its photo, asserts the image client is never called, the real cost is $0, and the real bytes sent to the video client for that character match exactly what was saved; `test_save_character_photo_overwrites_an_existing_cached_photo`) and `tests/test_bot_conversation.py` (3 tests for `get_current_screenplay`: none before any screenplay, the real current draft once one exists, none again after `/cancel`). Mutation-tested: changed the real cache filename `save_character_photo()` writes to (`..._manual.jpg` instead of the exact path `_resolve_character_photo()` checks), confirmed the cache-hit test fails for the real reason (`assert 1 == 0` - a real generation call happened because the paths no longer matched), restored, confirmed the full suite green (183/183).
+
+## Replicate's real low-credit throttle - every portrait failed in one real production run (2026-10-21)
+
+The first real production run on Replicate failed outright - every single character's portrait, real error text relayed verbatim by the owner:
+
+```
+Replicate image submit failed (429): {"detail":"Request was throttled. Your rate
+limit for creating predictions is reduced to 6 requests per minute with a burst
+of 1 requests while you have less than $5.0 in credit. Your rate limit resets
+in ~6s.","status":429,"retry_after":6}
+```
+
+This is Replicate's own, real, documented behavior - an account with under $5.00 in credit is throttled to 6 requests/minute with a burst of exactly 1. `DialoguePipeline`'s own pre-pass loop submits one portrait-generation request per speaking character back-to-back, with no pacing at all - exactly the pattern this real throttle exists to reject. Neither `RealReplicateImageClient` nor `RealReplicateVideoClient` had any retry logic for this (or for anything) - a single 429 killed that character's portrait outright, with the real, correct, no-fallback-face consequence already documented elsewhere: every line of that character failed and was reported, not silently replaced.
+
+**Fixed, using the real information the API itself provides**: both clients' submit call now goes through `_post_with_retry()` - on a real `429`, it reads `retry_after` (seconds) straight out of the response body Replicate already sent and sleeps exactly that long before retrying, up to `MAX_SUBMIT_RETRIES = 5` attempts, then gives up for real (an account that is genuinely out of credit must still fail cleanly, not retry forever). This is the same model this project already applies everywhere else: never guess a backoff duration when the real server already states one.
+
+Both `replicate_image_client.py` and `replicate_video_client.py` got the identical fix - the video endpoint shares the same account and the same real risk from the dialogue loop's own back-to-back line submissions.
+
+Covered by 4 new tests (2 per client, identical shape): `test_generate_image_retries_a_real_429_and_honors_the_real_retry_after` (a 429 then a real success - asserts exactly one retry and that `time.sleep` was called with the real `retry_after` value from the response, not a guessed constant) and `test_generate_image_gives_up_after_max_retries_on_persistent_429s` (asserts exactly `MAX_SUBMIT_RETRIES` attempts before the real error propagates), mirrored for the video client. Mutation-tested: reverted the submit call back to a bare `httpx.post` with no retry, confirmed both new tests fail for the real reason (one retry became zero; 5 expected attempts became 1), restored, confirmed the full suite green (187/187).
