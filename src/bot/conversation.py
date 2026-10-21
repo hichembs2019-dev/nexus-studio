@@ -54,7 +54,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from src.agents.dialogue_writer import DialogueWriterAgent
+from src.agents.dialogue_writer import DialogueWriterAgent, DialogueWriterError, count_quoted_moments
 from src.agents.publisher import PublishingAgent
 from src.integrations.fal_video_client import PRICE_PER_SECOND_USD
 from src.models import DialogueScreenplay, ProducedDialogueEpisode
@@ -166,6 +166,37 @@ class BotConversation:
 
         title = premise[:50]
         line_count = max(2, round(target_seconds / ESTIMATED_SECONDS_PER_LINE))
+
+        # Real incident, 2026-10-21: a real story with 25 real quoted
+        # moments was sent via /new (default 60s -> exactly 15 lines,
+        # 60/ESTIMATED_SECONDS_PER_LINE), not /full - the owner meant to
+        # use every quote verbatim but /new's own LLM prompt is free to
+        # SELECT or invent when there are more real quotes than
+        # line_count allows, which is exactly what /full exists to
+        # prevent. The real $6.838 that bought the wrong result, and a
+        # wrong video that reached a real public YouTube URL before
+        # anyone caught it, were spent because the bot let this through
+        # silently - the two commands are too easy to confuse (same
+        # story pasted first, one letter apart in spirit) to rely on the
+        # owner remembering correctly under pressure every time. If the
+        # real quote count already exceeds what this line_count can
+        # hold, this is refused before any real cost, not after.
+        try:
+            quote_count = count_quoted_moments(premise)
+        except DialogueWriterError as exc:
+            return BotReply(text=str(exc))
+        if quote_count > line_count:
+            return BotReply(
+                text=(
+                    f"⚠️ نصك يحتوي {quote_count} اقتباسًا حقيقيًا (كلامًا منقولًا حرفيًا بين «» أو \"\")، لكن "
+                    f"/new بالمدة التي أرسلتها سيبني {line_count} سطرًا فقط - أي أن الذكاء الاصطناعي سيضطر لاختيار "
+                    "بعض كلامك الحقيقي ويترك الباقي، أو حتى يخترع ما لم تكتبه.\n\n"
+                    "إن كنت تريد استخدام كل كلمة كتبتها حرفيًا بدون اختيار ولا اختراع، أرسل /full بدلاً من /new.\n"
+                    f"إن كنت تقصد فعلاً اختيار بعض الاقتباسات فقط، أرسل /new بمدة أطول "
+                    f"({int(quote_count * ESTIMATED_SECONDS_PER_LINE)} ثانية على الأقل)."
+                )
+            )
+
         screenplay = self._dialogue_writer.write_dialogue_screenplay(title, premise, line_count)
         state.screenplay = screenplay
         state.pending_text = ""

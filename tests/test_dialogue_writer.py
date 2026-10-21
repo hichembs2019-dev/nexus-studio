@@ -105,6 +105,28 @@ def test_write_dialogue_screenplay_lines_prompt_prioritizes_essential_quoted_mom
     assert "WHY something central happens" in lines_system_prompt
 
 
+def test_write_dialogue_screenplay_raises_if_the_model_casts_a_narrator_anyway():
+    # Real incident, 2026-10-21 ("لماذا تصر ان يوجد الراوي في الكودات ...
+    # احذف الراوي للابد الا بطلب مني"): the prompt-only fix above (forbid
+    # a narrator role) is a REQUEST the model can still ignore - and the
+    # real $6.838 wrong video is exactly what that looks like in
+    # production. There must be a code-level gate that rejects a
+    # narrator-named cast entry outright, not just a prompt asking the
+    # model not to add one. This covers the bare name, a name with other
+    # words around it, and the English word, all case-insensitively -
+    # and never calls the lines step once rejected, so no real cost is
+    # risked on a screenplay that was going to be thrown away anyway.
+    for narrator_name in ("الراوي", "راوي القصة", "Narrator", "The NARRATOR"):
+        cast_reply = _cast_reply(("فوزية", "female", "middle"), (narrator_name, "male", "middle"))
+        reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply])
+        writer = DialogueWriterAgent(reasoning)
+
+        with pytest.raises(DialogueWriterError, match="راوي"):
+            writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+        assert len(reasoning.calls) == 1  # the lines step must never be reached
+
+
 def test_write_dialogue_screenplay_assigns_different_photos_by_gender_and_age():
     cast_reply = _cast_reply(("Tom", "male", "older"), ("Amy", "female", "young"))
     lines_reply = json.dumps(

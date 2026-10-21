@@ -62,6 +62,35 @@ def test_new_with_empty_text_asks_for_an_idea_without_calling_the_writer():
     assert "الاستخدام" in reply.text
 
 
+def test_new_refuses_when_the_premise_has_more_real_quotes_than_its_line_count_without_calling_the_writer():
+    # Real incident, 2026-10-21: a real 25-real-quote story was sent via
+    # /new (default 60s -> 15 lines) instead of /full, which let the
+    # model SELECT/invent rather than guarantee every quote verbatim -
+    # the real $6.838 wrong video, published live to a real public
+    # YouTube URL, is what that cost. /new must refuse BEFORE calling
+    # the writer at all (reasoning.calls stays empty - zero real cost
+    # risked), not after, and must point the owner at /full.
+    conversation, _ = _conversation([])
+    premise = " ".join(f'"سطر رقم {i}"' for i in range(16))  # 16 real quotes, default /new -> 15 lines
+
+    reply = conversation.handle_new("chat1", premise)
+
+    assert "/full" in reply.text
+    assert "16" in reply.text
+    assert not reply.buttons
+
+
+def test_new_allows_a_premise_whose_real_quote_count_fits_its_line_count():
+    cast = _cast_reply(("فوزية", "female", "middle"))
+    lines = _lines_reply(("فوزية", "one", ""), ("فوزية", "two", ""))
+    conversation, _ = _conversation([cast, lines])
+    premise = f'{int(2 * ESTIMATED_SECONDS_PER_LINE)} "واحد" "اثنان"'  # 2 real quotes, 2 lines - exactly fits
+
+    reply = conversation.handle_new("chat1", premise)
+
+    assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
+
+
 def test_plain_text_messages_are_accumulated_and_new_without_args_uses_them_verbatim():
     # Real finding, 2026-10-19: Telegram auto-splits a long outgoing
     # message (~900 real words) into several plain messages, and only the

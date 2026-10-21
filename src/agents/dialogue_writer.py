@@ -90,6 +90,19 @@ verbatim - no choosing, no dropping, no merging. The owner pays for
 however many real lines that turns out to be (shown in the usual cost
 estimate before approval) - that tradeoff is explicitly theirs to make,
 not this code's to make for them.
+
+Fifth real finding, 2026-10-21 ("لماذا تصر ان يوجد الراوي في الكودات ...
+احذف الراوي للابد الا بطلب مني" - why do you insist the narrator exists
+in the code, delete it permanently unless I ask): the fix above (the
+second real finding) only ever told the model not to cast a narrator -
+a prompt instruction the model can still ignore, and the real $6.838
+incident's wrong video ("امراة تروي قصة" - a woman narrating a story)
+is exactly what it looks like when it does. There was no code-level
+check at all - a reply casting "الراوي"/"narrator" would have been
+accepted and built into a real Character like any other name. `_parse_cast`
+now rejects any such name outright with `DialogueWriterError`, before a
+screenplay is ever built from it - a narrator can reach production only
+if this check is deleted, never because the model happened to comply.
 """
 from __future__ import annotations
 
@@ -155,8 +168,15 @@ Rules:
 # moments, not one spanning both.
 _QUOTED_MOMENT_PATTERN = re.compile(r"«[^»]+»|\"[^\"]+\"|“[^”]+”")
 
+# Owner's standing instruction, 2026-10-21: no narrator, ever, unless the
+# owner explicitly asks for one - a code-level gate, not a prompt request
+# the model can ignore. Matches "راوي"/"الراوي" anywhere in the name (the
+# model has cast it as "الراوي الأول", "راوي القصة", etc., not only the
+# bare word) and "narrator" case-insensitively.
+_NARRATOR_NAME_PATTERN = re.compile(r"راوي|narrator", re.IGNORECASE)
 
-def _count_quoted_moments(premise: str) -> int:
+
+def count_quoted_moments(premise: str) -> int:
     # Real incident, 2026-10-20: a real long story's quoted-line count
     # came back far lower than the real number of quoted moments in it
     # (15 instead of 23), with no error - reproduced here: if even ONE
@@ -215,7 +235,7 @@ class DialogueWriterAgent:
         # model "the premise contains exactly 1 directly quoted moment"
         # when it contains zero - forcing it to invent the one thing
         # /full exists to guarantee never happens.
-        line_count = _count_quoted_moments(premise)
+        line_count = count_quoted_moments(premise)
         if line_count < 1:
             raise DialogueWriterError(
                 "لم أجد أي اقتباس حقيقي (بين «» أو \"\") في النص - /full يحتاج كلامًا منقولًا حرفيًا عن الشخصيات لبنائه. "
@@ -293,5 +313,11 @@ class DialogueWriterAgent:
                 raise DialogueWriterError(
                     f"Cast reply item {item!r} is missing or has a non-string/empty "
                     f"'name'/'gender'/'age_group'/'appearance': {raw_reply!r}"
+                )
+            if _NARRATOR_NAME_PATTERN.search(item["name"]):
+                raise DialogueWriterError(
+                    f"الذكاء الاصطناعي حاول إضافة \"{item['name']}\" كراوي - هذا ممنوع نهائيًا. كل من "
+                    "يتكلم في القصة يجب أن يكون شخصية حقيقية تظهر في المشهد وتتكلم مباشرة، لا راويًا "
+                    f"يسرد الأحداث. أعد المحاولة أو عدّل النص: {raw_reply!r}"
                 )
         return parsed
