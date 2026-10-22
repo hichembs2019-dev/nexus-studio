@@ -459,13 +459,42 @@ def test_produce_generates_and_uses_a_real_portrait_for_a_character_with_appeara
     produced = pipeline.produce(screenplay)
 
     assert image_client.calls == [
-        "photorealistic portrait photo of curly dark hair, slender build, in a scene from this real story: p"
+        "photorealistic portrait photo of a person, curly dark hair, slender build, in a scene from this real story: p"
         + PORTRAIT_STYLE_SUFFIX
     ]
     sent_image_b64 = fal_video.calls[0]["image_data_uri"].split(",", 1)[1]
     assert base64.b64decode(sent_image_b64) == b"real-generated-portrait-bytes"
     assert produced.portrait_cost_usd == pytest.approx(PRICE_PER_IMAGE_USD_UNVERIFIED)
     assert produced.total_cost_usd == pytest.approx(PROVISIONAL_PRICE_PER_SECOND_USD + PRICE_PER_IMAGE_USD_UNVERIFIED)
+
+
+def test_produce_sends_the_characters_real_gender_into_the_portrait_prompt(tmp_path):
+    # Real bug, photographed 2026-10-22: a character written and
+    # spoken-of as "الشاب" (the young man, gender="male" from the cast
+    # step) got a real woman's face in production - the portrait prompt
+    # had no gender signal at all, only appearance's free-text sentence,
+    # which does not reliably name a sex. Character.gender must now
+    # reach the real prompt, for both real genders, not just "default".
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
+    image_client = MockReplicateImageClient()
+    pipeline = DialoguePipeline(fal_video, MockTTSClient(), str(tmp_path), image_client=image_client)
+    screenplay = DialogueScreenplay(
+        title="T", premise="p",
+        characters=[
+            Character(name="A", appearance="short hair, broad build", gender="male"),
+            Character(name="B", appearance="long hair, slender build", gender="female"),
+        ],
+        lines=[
+            DialogueLine(index=0, character="A", line="one", action="a1"),
+            DialogueLine(index=1, character="B", line="two", action="a2"),
+        ],
+    )
+
+    pipeline.produce(screenplay)
+
+    assert image_client.calls[0].startswith("photorealistic portrait photo of a man, short hair, broad build")
+    assert image_client.calls[1].startswith("photorealistic portrait photo of a woman, long hair, slender build")
 
 
 def test_produce_sends_the_real_premise_as_scene_context_capped_to_300_chars(tmp_path):

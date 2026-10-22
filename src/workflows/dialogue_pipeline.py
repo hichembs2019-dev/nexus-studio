@@ -87,6 +87,15 @@ CAPTION_FONT_PATH = "/usr/share/fonts/truetype/noto/NotoNaskhArabic-Regular.ttf"
 CAPTION_CHARS_PER_SECOND = 15.0
 CAPTION_MIN_SECONDS = 2.0
 
+# Real bug found 2026-10-22 (see Character.gender's own comment,
+# models.py): the portrait prompt used to carry no gender signal at all,
+# only `appearance`'s free-text sentence - a real produced episode gave
+# a character written and spoken-of as "الشاب" (the young man) a
+# woman's face. The cast-writing LLM already infers "male"/"female" for
+# every character; this just stops that real inference from being
+# thrown away before it reaches the image prompt.
+_GENDER_NOUN = {"male": "a man", "female": "a woman"}
+
 
 class DialoguePipelineError(Exception):
     pass
@@ -499,9 +508,10 @@ class DialoguePipeline:
             # story - and a very long /full premise would otherwise bloat
             # every single real image prompt for no real benefit.
             scene_context = premise[:300]
+            gender_noun = _GENDER_NOUN.get(character.gender, "a person")
             prompt = (
-                f"photorealistic portrait photo of {character.appearance}, in a scene from this real story: "
-                f"{scene_context}"
+                f"photorealistic portrait photo of {gender_noun}, {character.appearance}, in a scene from this "
+                f"real story: {scene_context}"
             ) + PORTRAIT_STYLE_SUFFIX
             image_bytes = self._image_client.generate_image(prompt)
             with open(cache_path, "wb") as f:

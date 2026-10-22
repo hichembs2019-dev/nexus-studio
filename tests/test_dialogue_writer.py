@@ -329,6 +329,26 @@ def test_write_dialogue_screenplay_carries_the_real_appearance_onto_the_characte
     assert screenplay.characters[0].appearance == "curly dark hair, slender build"
 
 
+def test_write_dialogue_screenplay_carries_the_real_gender_onto_the_character():
+    # Real bug found 2026-10-22, from a real produced episode: gender
+    # was inferred here and used ONLY to pick a voice
+    # (resolve_placeholder_voice), never stored on Character - so the
+    # real portrait prompt (dialogue_pipeline.py) had no gender signal
+    # at all, and a character written as "الشاب" (the young man) was
+    # given a woman's face. This must now reach the Character object.
+    cast_reply = json.dumps([{"name": "أحمد", "gender": "MALE", "appearance": "short hair, broad build"}])
+    lines_reply = json.dumps([{"character": "أحمد", "line": "مرحبا", "action": "waving"}])
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    screenplay = writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+    # Normalized (lower/stripped) the same way resolve_placeholder_voice
+    # already normalizes it, so "MALE" and "male" are never treated as
+    # two different real genders.
+    assert screenplay.characters[0].gender == "male"
+
+
 def test_write_dialogue_screenplay_strips_markdown_fences_on_both_calls():
     cast_reply = "```json\n" + _cast_reply(("فوزية", "female")) + "\n```"
     lines_reply = "```json\n" + json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}]) + "\n```"

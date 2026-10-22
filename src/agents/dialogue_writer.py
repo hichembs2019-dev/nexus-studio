@@ -463,6 +463,7 @@ class DialogueWriterAgent:
                 name=c["name"],
                 voice=resolve_placeholder_voice(c["gender"]),
                 appearance=c["appearance"],
+                gender=c["gender"].strip().lower(),
             )
             for c in cast
         ]

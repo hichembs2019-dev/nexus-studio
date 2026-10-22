@@ -1650,3 +1650,46 @@ the live Telegram bot - only through the standalone proof (ComfyUI directly)
 and this session's unit tests (mocked Runpod/ComfyUI clients). A real
 Telegram-driven production run through this new path is the next real
 proof needed before this can be called wired, not just written.
+
+## Real bug: a character's own gender was inferred, then silently dropped before the portrait prompt (2026-10-22)
+
+Found from a real produced episode (the first through the new self-hosted
+S2V path) - the owner photographed the result: a character written and
+referred to throughout as "الشاب" (the young man) was given a real woman's
+face.
+
+Root cause, traced precisely, not guessed: `dialogue_writer.py`'s cast step
+already asks the casting LLM for `"gender": "male"/"female"` per character
+and DOES use it - but only to pick a TTS voice
+(`resolve_placeholder_voice(c["gender"])`). `Character` (`models.py`) had no
+`gender` field at all, so the value was thrown away immediately after. The
+real portrait prompt (`dialogue_pipeline.py`'s `_resolve_character_photo`)
+built its prompt from `character.appearance` alone - a free-text sentence
+("short dark hair, broad build, mid-20s") that does not reliably name a sex
+explicitly, so the real image model had nothing forcing it toward "male" and
+guessed wrong.
+
+Fix: `Character.gender` now stores the cast step's own real inference
+(normalized the same way `resolve_placeholder_voice` already does), and
+`_resolve_character_photo` prepends an explicit `"a man"`/`"a woman"` noun
+(`_GENDER_NOUN`) to the real prompt. 2 new tests, mutation-tested (dropped
+the `gender=` assignment in `dialogue_writer.py`, hard-coded `"a person"` in
+`dialogue_pipeline.py` - both fail for the real reason, restored). Full
+suite green: 246/246.
+
+**Separate, structural issue named honestly, not claimed fixed by this**:
+the same real episode's clips also read as static, camera-facing
+"testimonial" shots rather than a cinematic scene - the owner's own words:
+"لا يوجد لا فيلم و لا سينما ... عبارة سرد القصة و الراوي" (there is no film,
+no cinema - it reads as narration). This is NOT the gender bug and this fix
+does not address it. Mechanically: Wan 2.2 S2V animates lip-sync and motion
+around ONE fixed reference photo whose own framing
+(`PORTRAIT_STYLE_SUFFIX`: "looking directly at camera") is a portrait, not a
+scene - it does not choreograph multiple characters or camera work the way
+a text-to-video model does. The admired فوزية video was made with a
+DIFFERENT model (Wan 2.2 TI2V-5B, text-to-video, no reference photo) plus a
+narrator track, which the owner has separately, explicitly, permanently
+banned. No model proven in this codebase today produces both real
+audio-driven lip-sync AND true multi-character cinematic scene composition
+in one shot - this is a real, open technical gap (tracked as task #37/#38),
+not something a prompt change resolves.

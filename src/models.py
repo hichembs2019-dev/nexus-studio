@@ -61,6 +61,19 @@ class Character:
     # from THIS premise by the cast-writing LLM call - the ONLY source
     # DialoguePipeline ever generates a character's real photo from.
     appearance: str = ""
+    # Real bug found 2026-10-22, from a real produced episode: the
+    # cast-writing LLM call already infers "male"/"female" for every
+    # character (dialogue_writer.py's _CAST_SYSTEM_PROMPT) and it WAS
+    # used - but only to pick a TTS voice (resolve_placeholder_voice),
+    # never stored here. _resolve_character_photo's own portrait prompt
+    # (dialogue_pipeline.py) had no gender signal at all - only
+    # `appearance`'s free-text sentence, which does not reliably name a
+    # sex explicitly ("short dark hair, broad build, mid-20s" fits
+    # either). The real, photographed result: a character written and
+    # spoken-of as "الشاب" (the young man) was given a woman's face.
+    # Kept here, not re-derived, so the same real inference the LLM
+    # already made once is never silently discarded again.
+    gender: str = ""
 
 
 @dataclass
