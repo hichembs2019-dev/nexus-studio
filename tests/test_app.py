@@ -4,6 +4,7 @@ from src.app import build_app
 from src.config import Settings
 from src.integrations.replicate_image_client import PRICE_PER_IMAGE_USD_UNVERIFIED, RealReplicateImageClient
 from src.integrations.replicate_video_client import PROVISIONAL_PRICE_PER_SECOND_USD, RealReplicateVideoClient
+from src.integrations.self_hosted_video_client import SelfHostedS2VVideoClient, self_hosted_price_per_second_usd
 
 
 def _settings(**overrides) -> Settings:
@@ -12,6 +13,7 @@ def _settings(**overrides) -> Settings:
         youtube_client_id="", youtube_client_secret="", youtube_refresh_token="",
         telegram_bot_token="tg", azure_speech_key="azure-key", azure_speech_region="eastus",
         azure_tts_lang="ar-SY", replicate_api_token="",
+        runpod_api_key="", runpod_s2v_pod_id="", runpod_s2v_hourly_rate_usd=0.59,
         output_dir="./output-test", max_episode_cost_usd=10.0,
     )
     base.update(overrides)
@@ -58,3 +60,40 @@ def test_build_app_has_no_real_pipeline_when_replicate_is_not_configured():
     assert app.video_client is None
     assert app.dialogue_pipeline is None
     assert app.conversation is None
+
+
+def test_build_app_prefers_the_self_hosted_s2v_engine_when_a_real_pod_is_configured():
+    app = build_app(_settings(
+        replicate_api_token="r8_real", runpod_api_key="rp_real", runpod_s2v_pod_id="wt5ennaph7w5nh",
+    ))
+
+    assert isinstance(app.video_client, SelfHostedS2VVideoClient)
+    # Portraits still go through Replicate - there is no self-hosted image
+    # pipeline built (see app.py's own comment on this branch).
+    assert isinstance(app.dialogue_pipeline._image_client, RealReplicateImageClient)
+    expected_rate = self_hosted_price_per_second_usd(0.59)
+    assert app.dialogue_pipeline._price_per_second_usd == expected_rate
+    assert app.conversation._price_per_second_usd == expected_rate
+
+
+def test_build_app_falls_back_to_replicate_video_when_no_real_pod_is_configured():
+    # Mutation check: a version that always preferred self-hosted
+    # regardless of settings.self_hosted_s2v_configured would still pass
+    # test_build_app_wires_the_real_replicate_clients_when_configured
+    # above by accident if that test's own assertion were loosened -
+    # this one pins the OTHER side of the same branch explicitly.
+    app = build_app(_settings(replicate_api_token="r8_real", runpod_api_key="", runpod_s2v_pod_id=""))
+
+    assert isinstance(app.video_client, RealReplicateVideoClient)
+    assert app.dialogue_pipeline._price_per_second_usd == PROVISIONAL_PRICE_PER_SECOND_USD
+
+
+def test_build_app_does_not_use_self_hosted_s2v_without_a_real_replicate_token_for_portraits():
+    # Real constraint: there is no self-hosted image pipeline, so a real
+    # Runpod pod alone (no REPLICATE_API_TOKEN) must not pick the
+    # self-hosted branch - it would have a video provider but no way to
+    # ever produce a character portrait.
+    app = build_app(_settings(replicate_api_token="", runpod_api_key="rp_real", runpod_s2v_pod_id="wt5ennaph7w5nh"))
+
+    assert app.video_client is None
+    assert app.dialogue_pipeline is None

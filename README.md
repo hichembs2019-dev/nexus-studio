@@ -15,9 +15,15 @@
 مرجعية حقيقية فوتوغرافية لكل شخصية (`black-forest-labs/flux-dev`) مولّدة
 من وصفها في هذا السيناريو بالذات - ثم دمج كل المقاطع في فيلم واحد.
 
-**مزوّد الفيديو والصور الحقيقي الوحيد هو Replicate** (فيديو:
-`wan-video/wan-2.2-s2v`، صور: `black-forest-labs/flux-dev`،
-`REPLICATE_API_TOKEN`). **fal.ai حُذف نهائياً من الكود** (أمر المالك
+**مزوّد الصور الحقيقي الوحيد هو Replicate** (`black-forest-labs/flux-dev`،
+`REPLICATE_API_TOKEN`) - لا يوجد خط صور مُستضاف ذاتياً بعد. **مزوّد
+الفيديو** يكون محرك Wan 2.2 S2V الذاتي الاستضافة (بود Runpod خاص بهذا
+المشروع، `self_hosted_video_client.py`) عند توفّر `RUNPOD_API_KEY` +
+`RUNPOD_S2V_POD_ID` الحقيقيين - وإلا Replicate (`wan-video/wan-2.2-s2v`)،
+بنفس أولوية الاختيار حسب التهيئة الفعلية المستعملة أصلاً بين Groq/Gemini،
+لا مفتاح `VIDEO_PROVIDER` يدوي (ذاك حُذف نهائياً مع fal.ai - راجع
+`docs/SOURCES.md` "Self-hosted Wan 2.2 S2V wired into the real dialogue
+pipeline"). **fal.ai حُذف نهائياً من الكود** (أمر المالك
 الصريح والمتكرر، 2026-10-21: "لا تضع السراق، بل احذفهم من الكود" / "بل
 احذف كل الذي طلبته منك ... هذا ما طلبته منك بالظبط") - بعد فاتورة حقيقية
 أثبتت أن fal.ai كان يحتسب كل طلب بسعر 720p رغم أن الكود يطلب 480p دائماً
@@ -63,11 +69,15 @@ src/
     publisher.py                      # الفيلم المُنتج -> رفع حقيقي للمنصات
   workflows/
     dialogue_pipeline.py              # ينتج كل سطر فعلياً (صوت+فيديو+صورة) ثم يدمج
+    wan_s2v_prompt_builder.py         # بناء رسم ComfyUI الحقيقي لـ Wan 2.2 S2V
   bot/
     conversation.py                   # منطق البوت الكامل (مُختبر 100%، بلا مكتبة Telegram)
     runner.py                         # الربط الفعلي مع Telegram
   integrations/
-    replicate_video_client.py         # wan-video/wan-2.2-s2v الحقيقي (الفيديو)
+    replicate_video_client.py         # wan-video/wan-2.2-s2v الحقيقي (الفيديو، احتياطي)
+    self_hosted_video_client.py       # Wan 2.2 S2V ذاتي الاستضافة على بود Runpod خاص (الفيديو، مفضَّل)
+    runpod_client.py                  # دورة حياة البود الحقيقية + إيقاف تلقائي عند عدم الاستعمال
+    comfyui_s2v_client.py             # API الحقيقي لـ ComfyUI على البود (رفع/إرسال/تنزيل)
     replicate_image_client.py         # black-forest-labs/flux-dev الحقيقي (صور الشخصيات)
     tts_client.py                     # Azure Speech REST - صوت كل سطر منطوق
     reasoning_client.py               # Groq (أساسي) + Gemini (احتياطي)

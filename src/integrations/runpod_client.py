@@ -217,6 +217,55 @@ def deploy_idle_watchdog_via_ssh(
     )
 
 
+def _wait_until_running(client: RunpodClient, pod_id: str) -> None:
+    deadline = time.monotonic() + POD_START_TIMEOUT_S
+    while time.monotonic() < deadline:
+        if client.get_pod_status(pod_id).get("status") == "RUNNING":
+            return
+        time.sleep(POD_START_POLL_INTERVAL_S)
+    raise RunpodClientError(f"Pod {pod_id} did not reach RUNNING within {POD_START_TIMEOUT_S}s")
+
+
+def _wait_until_comfyui_ready(pod_id: str) -> None:
+    import httpx
+
+    url = f"https://{pod_id}-8188.proxy.runpod.net/system_stats"
+    deadline = time.monotonic() + COMFYUI_READY_TIMEOUT_S
+    while time.monotonic() < deadline:
+        try:
+            resp = httpx.get(url, timeout=10)
+            if resp.status_code == 200:
+                return
+        except httpx.HTTPError:
+            pass
+        time.sleep(COMFYUI_READY_POLL_INTERVAL_S)
+    raise RunpodClientError(f"ComfyUI on pod {pod_id} did not become ready within {COMFYUI_READY_TIMEOUT_S}s")
+
+
+def ensure_pod_ready(client: RunpodClient, pod_id: str) -> str:
+    """Starts the real pod if it is not already RUNNING, waits for it to
+    reach RUNNING and for its ComfyUI to answer /system_stats, and
+    returns the real public proxy base URL. Idempotent and cheap to call
+    again on an already-running, already-ready pod (one status read plus
+    one /system_stats probe - no real start/stop action).
+
+    Unlike `RunpodGpuSession`, this never stops the pod - built for
+    `SelfHostedS2VVideoClient`, which is called once per real dialogue
+    line within one production run and must not pay the real ~minutes-
+    long start+readiness cost on every single line. That caller relies
+    entirely on the separately-proven on-pod idle watchdog
+    (scripts/pod_idle_watchdog.py) to stop the real pod once the whole
+    run has gone idle - see that script's own docstring and
+    docs/SOURCES.md "The idle watchdog proven end to end, for real, zero
+    SSH"."""
+    status = client.get_pod_status(pod_id).get("status")
+    if status != "RUNNING":
+        client.start_pod(pod_id)
+        _wait_until_running(client, pod_id)
+    _wait_until_comfyui_ready(pod_id)
+    return f"https://{pod_id}-8188.proxy.runpod.net"
+
+
 class RunpodGpuSession:
     """Context manager wrapping one real production run on the GPU pod.
 
@@ -233,14 +282,11 @@ class RunpodGpuSession:
     def __init__(self, client: RunpodClient, pod_id: str):
         self._client = client
         self._pod_id = pod_id
+        self.base_url: str | None = None
 
     def __enter__(self) -> "RunpodGpuSession":
         try:
-            status = self._client.get_pod_status(self._pod_id).get("status")
-            if status != "RUNNING":
-                self._client.start_pod(self._pod_id)
-                self._wait_until_running()
-            self._wait_until_comfyui_ready()
+            self.base_url = ensure_pod_ready(self._client, self._pod_id)
         except Exception:
             # __exit__ is never called when __enter__ itself raises
             # (Python context-manager protocol), so a readiness failure
@@ -268,26 +314,3 @@ class RunpodGpuSession:
                 exc,
             )
             return False
-
-    def _wait_until_running(self) -> None:
-        deadline = time.monotonic() + POD_START_TIMEOUT_S
-        while time.monotonic() < deadline:
-            if self._client.get_pod_status(self._pod_id).get("status") == "RUNNING":
-                return
-            time.sleep(POD_START_POLL_INTERVAL_S)
-        raise RunpodClientError(f"Pod {self._pod_id} did not reach RUNNING within {POD_START_TIMEOUT_S}s")
-
-    def _wait_until_comfyui_ready(self) -> None:
-        import httpx
-
-        url = f"https://{self._pod_id}-8188.proxy.runpod.net/system_stats"
-        deadline = time.monotonic() + COMFYUI_READY_TIMEOUT_S
-        while time.monotonic() < deadline:
-            try:
-                resp = httpx.get(url, timeout=10)
-                if resp.status_code == 200:
-                    return
-            except httpx.HTTPError:
-                pass
-            time.sleep(COMFYUI_READY_POLL_INTERVAL_S)
-        raise RunpodClientError(f"ComfyUI on pod {self._pod_id} did not become ready within {COMFYUI_READY_TIMEOUT_S}s")

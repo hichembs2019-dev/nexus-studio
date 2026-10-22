@@ -1547,3 +1547,106 @@ Test inputs were real, not placeholder bytes: a real ~5s English sentence synthe
 **New code**: `src/workflows/wan_s2v_prompt_builder.py` (`build_s2v_prompt()`, `frames_for_duration()` - computes real frame count from real audio duration, enforcing the official template's own stated floor of 73 frames, rounded to its real `4n+1` step constraint) and `src/integrations/comfyui_s2v_client.py` (`RealComfyUIS2VClient`/`MockComfyUIS2VClient`, mirroring the proven `comfyui_client.py`'s shape, plus a real `upload_file()` using ComfyUI's generic `/upload/image` endpoint - confirmed live to accept any file type despite the name). 16 new tests, mutation-tested: reverted the VAE filename to the wrong (TI2V-5B) one, and removed the `CreateVideo` audio link - both failed for the real reason, restored, confirmed byte-identical via `diff`. Full suite green: 233/233.
 
 **Deliberately not yet done, named honestly**: the official template's own first-frame VAE-artifact fix ("double the first frame, decode, then cut it back out") is not implemented - a real quality improvement, not a correctness one, left as a tracked follow-up now that the graph is proven correct end to end. Not yet wired into `DialoguePipeline` or the live bot - that is a real design decision (how a character's line picks this backend over Replicate's) deliberately left for its own step rather than rushed into this one. Real pod cost for this whole research-to-proof arc: two pod lifetimes, roughly 12 and 11 real minutes, at $0.59/hr - under $0.25 total.
+
+## Self-hosted Wan 2.2 S2V wired into the real dialogue pipeline (2026-10-22)
+
+Owner's go-ahead ("نعم") to continue directly from the proof above, in the
+same breath as the earlier real brief ("فيلم سينمائي صوت و صورة و حوار و
+ممثلين"). `src/integrations/self_hosted_video_client.py`'s
+`SelfHostedS2VVideoClient` implements the exact same `ReplicateVideoClient`
+interface `RealReplicateVideoClient` does - `DialoguePipeline` needed zero
+changes at all to accept it.
+
+**The real production pod, confirmed live, not assumed from the proof
+session**: `GET` via the Runpod MCP's own `list-pods` (2026-10-22, this
+session) found `wt5ennaph7w5nh` still real and present - `EXITED` (not
+billing compute), image `ghcr.io/hichembs2019-dev/nexus-studio-comfyui:latest`
+(the custom watchdog-baked image), one NVIDIA A40, real cost `$0.59/hr`,
+mounted on network volume `yamxrkrdos` which still holds every real Wan 2.2
+S2V model file downloaded during the proof. This is the same pod the proof
+above used - nothing new had to be provisioned. A second, now-redundant pod
+(`d2vz86hrciih26`, the pre-custom-image research pod, same volume) is still
+present too - left alone, not this session's call to delete without being
+asked, and EXITED pods cost nothing beyond the shared volume either way.
+
+**Pod lifecycle, deliberately NOT one `RunpodGpuSession` per line**: a
+dialogue episode calls `generate_speech_to_video()` once per spoken line,
+and `RunpodGpuSession`'s own real start+readiness cost is minutes, not
+seconds - wrapping every single line in its own session would mean minutes
+of real pod-start wait before every line of a multi-line episode.
+`runpod_client.py` was refactored (behavior-preserving - the existing
+`RunpodGpuSession` test suite, 11/11, passes unchanged) to extract
+`ensure_pod_ready(client, pod_id) -> base_url`, the same start-if-needed +
+wait-until-RUNNING + wait-until-ComfyUI-ready logic `RunpodGpuSession.
+__enter__` already had. `SelfHostedS2VVideoClient` calls this on EVERY real
+line (cheap once the pod is already up - one status read, one
+`/system_stats` probe) but **never calls `stop_pod()` itself** - it relies
+entirely on the already proven-live on-pod idle watchdog
+(`scripts/pod_idle_watchdog.py`, see "The idle watchdog proven end to end,
+for real, zero SSH" above) to stop the real pod once a whole episode has
+gone idle. This still satisfies the owner's hard standing requirement
+(automatic stop, never a silently-draining balance) through a mechanism
+already independently proven on a real pod, without restarting the pod
+between every line of the same episode.
+
+**Real cost tracking, honestly limited, not guessed**: `DialoguePipeline`
+and `BotConversation` both compute real cost as `output_clip_duration_seconds
+* price_per_second_usd` - a single shared knob, with no hook for a client to
+report its own differently-computed real cost back through the
+`ReplicateVideoClient` interface (`generate_speech_to_video` returns bytes
+only). This project's standing rule is to never guess a money formula (see
+the fal.ai 720p/480p billing-mismatch incident above, which cost real
+trust). `self_hosted_price_per_second_usd()` is therefore built from one
+real, directly-observed number - the pod's own real hourly rate ($0.59/hr,
+confirmed live above) - divided into real dollars-per-GPU-second, applied to
+the output clip's own duration as an explicitly-documented conservative
+PROXY: a real S2V sampling run always takes at least as long as the clip it
+produces (model load, encode, 4 real sampling steps, decode, mux), so this
+almost always UNDERSTATES the real wall-clock GPU time - never an
+overstatement that would wrongly block spend, the same safety-margin
+posture `PROVISIONAL_PRICE_PER_SECOND_USD` already uses for Replicate.
+Refining this into a real measured-wall-clock-time cost is a named follow-up
+once this path has a real production run to measure against, not guessed
+here. The real rate itself is never hard-coded past one documented default -
+`Settings.runpod_s2v_hourly_rate_usd` (`RUNPOD_S2V_HOURLY_RATE_USD` env var,
+defaults to the real observed `0.59`) is the one actually used, in case the
+pod is ever recreated on different real hardware.
+
+**Wiring priority, not a reintroduced toggle**: `src/app.py`'s `build_app()`
+now prefers the self-hosted engine over Replicate whenever BOTH a real
+Runpod pod (`RUNPOD_API_KEY` + `RUNPOD_S2V_POD_ID`) AND a real Replicate
+token (still needed for portraits - no self-hosted image pipeline exists)
+are configured - the same priority-by-real-configuration pattern this
+function already uses for Groq-over-Gemini, never a manual `VIDEO_PROVIDER`
+selector (that selector was deleted outright when fal.ai was removed, see
+"fal.ai deleted from the codebase" above: "there is only one real provider
+left to select"). On the real droplet today neither `RUNPOD_API_KEY` nor
+`RUNPOD_S2V_POD_ID` is set yet, so production behavior is genuinely
+unchanged until the owner adds those two as real GitHub repository secrets,
+the same way `REPLICATE_API_TOKEN` was added 2026-10-21 - `.github/workflows/
+deploy.yml`'s real key-presence diagnostic now also names them (never their
+values).
+
+**New code**: `src/integrations/self_hosted_video_client.py`
+(`SelfHostedS2VVideoClient`, `self_hosted_price_per_second_usd()`,
+`SelfHostedS2VError`), `ensure_pod_ready()` extracted into
+`runpod_client.py`, `Settings.self_hosted_s2v_configured` + three new real
+env vars (`config.py`), the new priority branch in `app.py`. 12 new tests
+(`test_self_hosted_video_client.py` + 3 in `test_app.py`), mutation-tested:
+reverted the `/3600.0` rate arithmetic to `/60.0` (fails for the real
+reason - pins per-second, not per-minute, math), added a real `stop_pod()`
+call inside `generate_speech_to_video()` (fails - pins the "never restarts
+the pod mid-episode" design point), and forced the self-hosted `app.py`
+condition to `False` (fails - pins the priority wiring itself); all three
+restored, confirmed clean via `diff`. Full suite green: 244/244.
+
+**Still not done, named honestly**: the official template's first-frame
+VAE-artifact fix remains deferred (quality, not correctness - unchanged
+from the proof entry above). The self-hosted price-per-second figure is a
+conservative proxy, not a measured real-call cost - flagged above, not
+hidden. `RUNPOD_API_KEY`/`RUNPOD_S2V_POD_ID` are not yet set as real GitHub
+secrets on this repository, so this path has not yet run end to end through
+the live Telegram bot - only through the standalone proof (ComfyUI directly)
+and this session's unit tests (mocked Runpod/ComfyUI clients). A real
+Telegram-driven production run through this new path is the next real
+proof needed before this can be called wired, not just written.

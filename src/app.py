@@ -29,6 +29,8 @@ from .integrations.replicate_video_client import (
     RealReplicateVideoClient,
     ReplicateVideoClient,
 )
+from .integrations.runpod_client import RealRunpodClient
+from .integrations.self_hosted_video_client import SelfHostedS2VVideoClient, self_hosted_price_per_second_usd
 from .integrations.tts_client import MockTTSClient, RealAzureTTSClient, TTSClient
 from .workflows.dialogue_pipeline import DialoguePipeline
 
@@ -118,7 +120,35 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
     # mock/unconfigured build where no real pipeline exists at all.
     price_per_second_usd: float = PROVISIONAL_PRICE_PER_SECOND_USD
     price_per_image_usd: float = PRICE_PER_IMAGE_USD_UNVERIFIED
-    if not force_mocks and settings.replicate_configured and settings.azure_speech_configured:
+    # Owner's instruction, 2026-10-22 ("نعم" to continuing the wiring,
+    # right after the self-hosted Wan 2.2 S2V graph was proven end to
+    # end on a real pod): preferred over Replicate whenever both a real
+    # Runpod pod AND a real Replicate token (portraits still need
+    # Replicate - there is no self-hosted image pipeline built) are
+    # configured, the same priority-by-real-configuration pattern this
+    # function already uses for Groq-over-Gemini above - never a
+    # `VIDEO_PROVIDER` manual toggle, which was deleted outright when
+    # fal.ai was removed (docs/SOURCES.md: "there is only one real
+    # provider left to select"). The owner's own stated reason for
+    # rebuilding this pipeline at all was quality ("فوزية و جويدة ...
+    # احسن و واقعي اكثر من drama"), so once it is configured it is the
+    # real path actually used, not a lower-priority fallback.
+    if not force_mocks and settings.self_hosted_s2v_configured and settings.replicate_configured and settings.azure_speech_configured:
+        video_client = SelfHostedS2VVideoClient(RealRunpodClient(settings.runpod_api_key), settings.runpod_s2v_pod_id)
+        image_client = RealReplicateImageClient(settings.replicate_api_token)
+        price_per_second_usd = self_hosted_price_per_second_usd(settings.runpod_s2v_hourly_rate_usd)
+        logger.info("Real video provider: self-hosted Wan 2.2 S2V (Runpod pod %s)", settings.runpod_s2v_pod_id)
+        logger.info("Real image provider: Replicate (black-forest-labs/flux-dev)")
+        dialogue_writer = DialogueWriterAgent(reasoning)
+        dialogue_pipeline = DialoguePipeline(
+            video_client, tts, settings.output_dir,
+            tts_lang=settings.azure_tts_lang,
+            max_cost_usd=settings.max_episode_cost_usd,
+            image_client=image_client,
+            price_per_second_usd=price_per_second_usd,
+            price_per_image_usd=price_per_image_usd,
+        )
+    elif not force_mocks and settings.replicate_configured and settings.azure_speech_configured:
         video_client = RealReplicateVideoClient(settings.replicate_api_token)
         image_client = RealReplicateImageClient(settings.replicate_api_token)
         logger.info("Real video provider: Replicate (wan-video/wan-2.2-s2v)")

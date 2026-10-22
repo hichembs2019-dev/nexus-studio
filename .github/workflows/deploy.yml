@@ -47,11 +47,19 @@ jobs:
         # 2026-10-21) - this value is never printed by this workflow.
         env:
           REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+          # Owner's instruction, 2026-10-22 ("نعم" to continuing the
+          # wiring): same real secret-sync mechanism as
+          # REPLICATE_API_TOKEN above, for the self-hosted Wan 2.2 S2V
+          # engine (src/integrations/self_hosted_video_client.py) - see
+          # docs/SOURCES.md "Self-hosted Wan 2.2 S2V: a real cinematic
+          # clip, proven end to end".
+          RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
+          RUNPOD_S2V_POD_ID: ${{ secrets.RUNPOD_S2V_POD_ID }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: REPLICATE_API_TOKEN
+          envs: REPLICATE_API_TOKEN,RUNPOD_API_KEY,RUNPOD_S2V_POD_ID
           script: |
             set -e
             cd ~/nexus-studio
@@ -77,6 +85,20 @@ jobs:
                 echo "REPLICATE_API_TOKEN=${REPLICATE_API_TOKEN}" >> .env
               fi
             fi
+            if [ -n "${RUNPOD_API_KEY:-}" ]; then
+              if grep -q "^RUNPOD_API_KEY=" .env 2>/dev/null; then
+                sed -i "s|^RUNPOD_API_KEY=.*|RUNPOD_API_KEY=${RUNPOD_API_KEY}|" .env
+              else
+                echo "RUNPOD_API_KEY=${RUNPOD_API_KEY}" >> .env
+              fi
+            fi
+            if [ -n "${RUNPOD_S2V_POD_ID:-}" ]; then
+              if grep -q "^RUNPOD_S2V_POD_ID=" .env 2>/dev/null; then
+                sed -i "s|^RUNPOD_S2V_POD_ID=.*|RUNPOD_S2V_POD_ID=${RUNPOD_S2V_POD_ID}|" .env
+              else
+                echo "RUNPOD_S2V_POD_ID=${RUNPOD_S2V_POD_ID}" >> .env
+              fi
+            fi
             git pull origin main
             docker compose up -d --build nexus-studio
             sleep 8
@@ -91,7 +113,7 @@ jobs:
             # Never prints a key's real value - only whether the line in
             # .env has anything after the "=" at all.
             echo "=== real key presence in .env (values never printed) ==="
-            for k in GROQ_API_KEY GEMINI_API_KEY AZURE_SPEECH_KEY TELEGRAM_BOT_TOKEN REPLICATE_API_TOKEN; do
+            for k in GROQ_API_KEY GEMINI_API_KEY AZURE_SPEECH_KEY TELEGRAM_BOT_TOKEN REPLICATE_API_TOKEN RUNPOD_API_KEY RUNPOD_S2V_POD_ID; do
               if grep -q "^${k}=..*" .env 2>/dev/null; then
                 echo "$k: SET"
               else

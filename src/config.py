@@ -33,6 +33,27 @@ class Settings:
     # their real client files (fal_video_client.py, image_client.py) are
     # deleted outright. Replicate is the only real video/image provider.
     replicate_api_token: str
+    # Owner's instruction, 2026-10-22 ("نعم" to continuing the wiring,
+    # after the self-hosted Wan 2.2 S2V graph was proven end to end on a
+    # real pod - see docs/SOURCES.md): the self-hosted engine is a real,
+    # second `ReplicateVideoClient` implementation
+    # (self_hosted_video_client.py), preferred over Replicate when both
+    # are configured (same priority-by-configuration pattern app.py
+    # already uses for Groq-over-Gemini, not a reintroduced
+    # `VIDEO_PROVIDER` toggle - that selector was deleted outright when
+    # fal.ai was removed, see docs/SOURCES.md, and is not brought back
+    # here). Needs a real Runpod API key AND a real, already-provisioned
+    # pod id - there is no "create a pod on demand" path, since the real
+    # model weights only exist on one specific pod's network volume.
+    runpod_api_key: str
+    runpod_s2v_pod_id: str
+    # Real, live-read rate for the actual production pod (`wt5ennaph7w5nh`,
+    # Runpod MCP list-pods, 2026-10-22: one NVIDIA A40, $0.59/hr) - kept
+    # configurable, never hard-coded past this one default, because a
+    # pod's real billed rate is tied to its own GPU/host and can change
+    # if the pod is ever recreated (see self_hosted_video_client.py's own
+    # docstring for how this feeds the shared price_per_second_usd knob).
+    runpod_s2v_hourly_rate_usd: float
     output_dir: str
     # Owner's instruction, 2026-10-20 ("قلت لك ضع له كود يشتغل و يسحب
     # المال الا عند صنع فيديو" - I told you to put code in that only
@@ -70,6 +91,10 @@ class Settings:
     def replicate_configured(self) -> bool:
         return bool(self.replicate_api_token)
 
+    @property
+    def self_hosted_s2v_configured(self) -> bool:
+        return bool(self.runpod_api_key and self.runpod_s2v_pod_id)
+
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
@@ -89,6 +114,9 @@ class Settings:
             # DialoguePipeline path actually uses (see character_photos.py).
             azure_tts_lang=os.environ.get("AZURE_TTS_LANG", "ar-SY"),
             replicate_api_token=os.environ.get("REPLICATE_API_TOKEN", ""),
+            runpod_api_key=os.environ.get("RUNPOD_API_KEY", ""),
+            runpod_s2v_pod_id=os.environ.get("RUNPOD_S2V_POD_ID", ""),
+            runpod_s2v_hourly_rate_usd=float(os.environ.get("RUNPOD_S2V_HOURLY_RATE_USD", "0.59")),
             output_dir=os.environ.get("OUTPUT_DIR", "./output"),
             max_episode_cost_usd=float(os.environ.get("MAX_EPISODE_COST_USD", "10.0")),
         )
