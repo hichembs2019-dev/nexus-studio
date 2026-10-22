@@ -458,11 +458,43 @@ def test_produce_generates_and_uses_a_real_portrait_for_a_character_with_appeara
 
     produced = pipeline.produce(screenplay)
 
-    assert image_client.calls == ["photorealistic portrait photo of curly dark hair, slender build" + PORTRAIT_STYLE_SUFFIX]
+    assert image_client.calls == [
+        "photorealistic portrait photo of curly dark hair, slender build, in a scene from this real story: p"
+        + PORTRAIT_STYLE_SUFFIX
+    ]
     sent_image_b64 = fal_video.calls[0]["image_data_uri"].split(",", 1)[1]
     assert base64.b64decode(sent_image_b64) == b"real-generated-portrait-bytes"
     assert produced.portrait_cost_usd == pytest.approx(PRICE_PER_IMAGE_USD_UNVERIFIED)
     assert produced.total_cost_usd == pytest.approx(PROVISIONAL_PRICE_PER_SECOND_USD + PRICE_PER_IMAGE_USD_UNVERIFIED)
+
+
+def test_produce_sends_the_real_premise_as_scene_context_capped_to_300_chars(tmp_path):
+    # Real finding, 2026-10-22: the owner compared a real produced clip
+    # against the project's first real video (two people in a real
+    # kitchen) and named the real difference precisely - "الفرق بينهم في
+    # المشهد" (the difference between them is in the scene). Every
+    # portrait used to be an isolated studio headshot with a plain,
+    # empty background, regardless of how real or balanced the dialogue
+    # was. The real story's own premise must now reach the image prompt
+    # so the model has something to place the character INSIDE.
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    long_premise = "مطبخ دافئ في بيت العائلة، " * 20  # well over 300 real chars
+
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
+    image_client = MockReplicateImageClient()
+    pipeline = DialoguePipeline(fal_video, MockTTSClient(), str(tmp_path), image_client=image_client)
+    screenplay = DialogueScreenplay(
+        title="T", premise=long_premise,
+        characters=[Character(name="A", appearance="a")],
+        lines=[DialogueLine(index=0, character="A", line="one", action="a1")],
+    )
+
+    pipeline.produce(screenplay)
+
+    sent_prompt = image_client.calls[0]
+    assert "in a scene from this real story:" in sent_prompt
+    assert long_premise[:300] in sent_prompt
+    assert long_premise[:301] not in sent_prompt  # genuinely capped, not the full premise
 
 
 def test_produce_reuses_the_cached_portrait_without_regenerating_on_a_second_call(tmp_path):

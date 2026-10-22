@@ -44,7 +44,25 @@ CINEMATIC_STYLE_SUFFIX = ", cinematic lighting, warm color grading, emotional cl
 # per character, from that character's own `appearance` (inferred by the
 # cast-writing LLM call from THIS premise, see dialogue_writer.py) -
 # never two different stories' characters sharing the same face.
-PORTRAIT_STYLE_SUFFIX = ", neutral friendly expression, looking directly at camera, soft studio lighting, plain neutral background, photorealistic, shot on a DSLR, sharp focus"
+#
+# Real finding, 2026-10-22: the owner compared a real produced clip
+# against the first real video this project ever made (two people
+# together in a real kitchen, a bowl of rice on the table between them)
+# and named the real difference precisely: "الفرق بينهم في المشهد" (the
+# difference between them is in the SCENE). It was never about how the
+# lines were distributed (already fixed, see _MAX_SINGLE_CHARACTER_LINE_SHARE
+# in dialogue_writer.py) - every reference photo was generated as an
+# isolated studio headshot against a flat, empty background, by this
+# constant's own old wording ("soft studio lighting, plain neutral
+# background"). No matter how real the lip-sync or how balanced the
+# dialogue, a floating head in front of nothing can never read as a real
+# film scene. Rewritten to place the character inside a real, lived-in
+# location consistent with the story - still one still photo, still no
+# second person in the same frame (that would need a genuinely different,
+# unproven model - see docs/SOURCES.md), but a real environment instead
+# of an empty backdrop, which is the one concrete, low-risk improvement
+# available without a new model or new real-money risk.
+PORTRAIT_STYLE_SUFFIX = ", natural expression, looking directly at camera, photorealistic, shot on a DSLR, sharp focus, cinematic lighting - set within a real, lived-in location that fits the story (a home, a workplace, outdoors, wherever the story actually places them), never a plain studio backdrop or neutral background"
 
 # Owner's instruction, 2026-10-20 ("نحذف الام و يبقى حوارها مكتوب على
 # الشاشة... و كذلك نحذف الاب... لكي نستحقظ على المال" - remove the
@@ -240,7 +258,7 @@ class DialoguePipeline:
                     (character.name, "تم الوصول للحد الأقصى للتكلفة قبل محاولة توليد صورة حقيقية لهذه الشخصية")
                 )
                 continue
-            photo_path, cost, failure = self._resolve_character_photo(character, slug)
+            photo_path, cost, failure = self._resolve_character_photo(character, slug, screenplay.premise)
             spent_so_far += cost
             portrait_cost_usd += cost
             if photo_path is not None:
@@ -444,7 +462,9 @@ class DialoguePipeline:
             portrait_failures=portrait_failures,
         )
 
-    def _resolve_character_photo(self, character: Character, slug: str) -> tuple[str | None, float, str | None]:
+    def _resolve_character_photo(
+        self, character: Character, slug: str, premise: str
+    ) -> tuple[str | None, float, str | None]:
         """Returns (path_or_None, real_cost_added_usd, failure_reason_or_None).
         Generates at most once ever per (this screenplay, this character) -
         a cached file on disk short-circuits every later call, including a
@@ -455,7 +475,13 @@ class DialoguePipeline:
         must be per-story): there is no fallback face any more. A real
         failure, a missing `appearance`, or no configured image client
         each return None - the caller (produce()) then fails that
-        character's lines instead of ever using a stand-in photo."""
+        character's lines instead of ever using a stand-in photo.
+
+        `premise` (the real screenplay's own story text) is passed in so
+        the real image model has something to place the character INSIDE
+        - see PORTRAIT_STYLE_SUFFIX's own 2026-10-22 comment for why a
+        studio headshot with nothing behind it can never read as a real
+        film scene, however balanced the dialogue is."""
         char_slug = _slug(character.name, default="character")
         cache_dir = os.path.join(self._output_dir, "characters")
         cache_path = os.path.join(cache_dir, f"{slug}_{char_slug}.jpg")
@@ -467,7 +493,16 @@ class DialoguePipeline:
             return None, 0.0, "لا يوجد وصف لهذه الشخصية لتوليد صورة حقيقية منه"
         try:
             os.makedirs(cache_dir, exist_ok=True)
-            prompt = f"photorealistic portrait photo of {character.appearance}" + PORTRAIT_STYLE_SUFFIX
+            # Capped, not the full premise verbatim: this only needs to
+            # tell the image model WHERE the character real is (a
+            # kitchen, a hospital room, a street), not retell the whole
+            # story - and a very long /full premise would otherwise bloat
+            # every single real image prompt for no real benefit.
+            scene_context = premise[:300]
+            prompt = (
+                f"photorealistic portrait photo of {character.appearance}, in a scene from this real story: "
+                f"{scene_context}"
+            ) + PORTRAIT_STYLE_SUFFIX
             image_bytes = self._image_client.generate_image(prompt)
             with open(cache_path, "wb") as f:
                 f.write(image_bytes)
