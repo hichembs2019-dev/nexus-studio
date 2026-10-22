@@ -14,20 +14,46 @@ jobs:
           python3 - <<'PYEOF'
           import json
           import os
+          import urllib.error
           import urllib.request
 
           token = os.environ["REPLICATE_API_TOKEN"]
-          req = urllib.request.Request(
-              "https://api.replicate.com/v1/models/zsxkib/multitalk",
-              headers={"Authorization": f"Bearer {token}"},
-          )
-          with urllib.request.urlopen(req, timeout=30) as resp:
-              payload = json.load(resp)
 
-          print("=== top-level keys ===")
-          print(list(payload.keys()))
-          schema = payload.get("latest_version", {}).get("openapi_schema", {})
-          input_schema = schema.get("components", {}).get("schemas", {}).get("Input", {})
-          print("=== REAL Input schema ===")
-          print(json.dumps(input_schema, indent=2, ensure_ascii=False))
+          # First, the real model-info GET (may 403 even with a valid token
+          # if this endpoint has stricter scope than predictions do - real
+          # evidence either way, not guessed).
+          try:
+              req = urllib.request.Request(
+                  "https://api.replicate.com/v1/models/zsxkib/multitalk",
+                  headers={"Authorization": f"Bearer {token}"},
+              )
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  payload = json.load(resp)
+              print("=== model GET succeeded ===")
+              schema = payload.get("latest_version", {}).get("openapi_schema", {})
+              input_schema = schema.get("components", {}).get("schemas", {}).get("Input", {})
+              print(json.dumps(input_schema, indent=2, ensure_ascii=False))
+          except urllib.error.HTTPError as exc:
+              print(f"=== model GET failed: {exc.code} {exc.reason} ===")
+              print(exc.read().decode(errors="replace"))
+
+          # Second, deliberately empty input on the real predictions
+          # endpoint - Replicate validates the input shape BEFORE billing
+          # anything, so a real 422 here reveals the real required fields
+          # at zero real cost, without guessing field names blind.
+          print()
+          print("=== predictions POST with empty input (validation only, no real cost) ===")
+          try:
+              req = urllib.request.Request(
+                  "https://api.replicate.com/v1/models/zsxkib/multitalk/predictions",
+                  data=json.dumps({"input": {}}).encode(),
+                  headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                  method="POST",
+              )
+              with urllib.request.urlopen(req, timeout=30) as resp:
+                  print(f"unexpected success: {resp.status}")
+                  print(resp.read().decode(errors="replace"))
+          except urllib.error.HTTPError as exc:
+              print(f"status: {exc.code} {exc.reason}")
+              print(exc.read().decode(errors="replace"))
           PYEOF
