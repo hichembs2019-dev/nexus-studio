@@ -158,6 +158,89 @@ def test_write_dialogue_screenplay_raises_if_the_model_casts_a_narrator_anyway()
         assert len(reasoning.calls) == 1  # the lines step must never be reached
 
 
+def test_write_dialogue_screenplay_rejects_one_character_dominating_the_lines():
+    # Real incident, 2026-10-22: a real produced 22-line episode was, in
+    # the owner's own words, "صوت واحد فقط طوال الفيديو" (one voice only,
+    # the entire video) - one character carried nearly the whole real
+    # screenplay, functionally a narrator even though no character was
+    # literally named "راوي". _NARRATOR_NAME_PATTERN never catches this,
+    # since it only checks names. 3 of 4 real lines = 75%, over the 70%
+    # ceiling.
+    cast_reply = _cast_reply(("الشاب", "male"), ("الأب", "male"))
+    lines_reply = json.dumps(
+        [
+            {"character": "الشاب", "line": "أولاً", "action": ""},
+            {"character": "الشاب", "line": "ثانياً", "action": ""},
+            {"character": "الشاب", "line": "ثالثاً", "action": ""},
+            {"character": "الأب", "line": "رابعاً", "action": ""},
+        ]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="الشاب"):
+        writer.write_dialogue_screenplay("T", "p", line_count=4)
+
+
+def test_write_dialogue_screenplay_allows_a_real_imbalance_under_the_ceiling():
+    # 2 of 3 lines = 67%, under the 70% ceiling - a real, plausible scene
+    # (one character talks more, but the other genuinely participates)
+    # must not be rejected for this.
+    cast_reply = _cast_reply(("الشاب", "male"), ("الأب", "male"))
+    lines_reply = json.dumps(
+        [
+            {"character": "الشاب", "line": "أولاً", "action": ""},
+            {"character": "الشاب", "line": "ثانياً", "action": ""},
+            {"character": "الأب", "line": "ثالثاً", "action": ""},
+        ]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    screenplay = writer.write_dialogue_screenplay("T", "p", line_count=3)
+
+    assert len(screenplay.lines) == 3
+
+
+def test_write_dialogue_screenplay_does_not_apply_the_dominance_check_to_a_single_character_cast():
+    # A genuinely one-character cast has nothing to "balance" against -
+    # not the pattern this guard exists to catch (which is specifically
+    # a many-named cast where only one of them ever really speaks).
+    cast_reply = _cast_reply(("الشاب", "male"))
+    lines_reply = json.dumps(
+        [
+            {"character": "الشاب", "line": "أولاً", "action": ""},
+            {"character": "الشاب", "line": "ثانياً", "action": ""},
+        ]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    screenplay = writer.write_dialogue_screenplay("T", "p", line_count=2)
+
+    assert len(screenplay.lines) == 2
+
+
+def test_write_complete_dialogue_screenplay_also_rejects_one_character_dominating_the_lines():
+    # Same real guard, same real incident - /full goes through the same
+    # _write() method and must be covered identically.
+    premise = '«أ» قال «ب» قال «ج» قال «د» رد'
+    cast_reply = _cast_reply(("الشاب", "male"), ("الأب", "male"))
+    lines_reply = json.dumps(
+        [
+            {"character": "الشاب", "line": "أ", "action": ""},
+            {"character": "الشاب", "line": "ب", "action": ""},
+            {"character": "الشاب", "line": "ج", "action": ""},
+            {"character": "الأب", "line": "د", "action": ""},
+        ]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="الشاب"):
+        writer.write_complete_dialogue_screenplay("T", premise)
+
+
 def test_write_dialogue_screenplay_assigns_different_voices_by_gender():
     # Owner's standing instruction, 2026-10-21 ("احذف الستة صور و قلت
     # التوليد حسب القصة" - delete the six photos, generation must be
@@ -533,6 +616,34 @@ def test_route_message_discuss_never_implies_real_production_started():
 
     assert routed.intent == "discuss"
     assert "✅" in routed.reply
+
+
+def test_router_prompt_requires_answering_the_real_question_not_a_canned_reminder():
+    # Real incident, 2026-10-22: a real owner asked direct, unambiguous
+    # questions ("اي زر؟", "لماذا لا تجيب يا غبي؟", "ما هي المشكلة في
+    # الراوي؟") and got the same boilerplate "press ✅" / unprompted
+    # narrator reassurance back every single time, never an answer to
+    # what was actually asked - five real replies in a row, none of them
+    # addressing the real message. The old prompt only ever told the
+    # model what to do when a message "sounds like approval" - nothing
+    # constrained the (far more common) case where it does not.
+    from src.agents.dialogue_writer import _ROUTER_SYSTEM_PROMPT
+
+    assert "directly and specifically answer" in _ROUTER_SYSTEM_PROMPT
+    assert "real failure mode that has happened live" in _ROUTER_SYSTEM_PROMPT
+
+
+def test_router_prompt_forbids_unprompted_narrator_mentions():
+    # Real incident, same evening: every one of those canned replies also
+    # brought up "راوٍ" (narrator) unprompted - the owner never asked
+    # about one in several of those messages. Traced to the model
+    # conflating a caption line's own "(نص على الشاشة، غير منطوق)" marker
+    # (route_message()'s own draft_lines rendering) with narration -
+    # never explained to the model as anything other than that.
+    from src.agents.dialogue_writer import _ROUTER_SYSTEM_PROMPT
+
+    assert "never a narrator" in _ROUTER_SYSTEM_PROMPT
+    assert 'unless the owner\'s own new message itself raises it' in _ROUTER_SYSTEM_PROMPT
 
 
 def test_route_message_rejects_an_unrecognized_intent():

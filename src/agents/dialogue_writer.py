@@ -209,13 +209,25 @@ Rules for choosing "intent":
 - "build_screenplay": the owner is explicitly asking to build or start the screenplay now (e.g. "ابن السيناريو", "جاهز", "كمل", "اصنعه الآن", "build it", "ابدأ").
 - "edit_lines": the owner is asking to change specific EXISTING line(s) of a draft that already exists - never valid if no draft exists (choose "discuss" instead and say so). If the owner gives their OWN exact words for the new line (quoted, or clearly dictated verbatim), you MUST use that EXACT text in "text" - never paraphrase, shorten, improve, or correct it, even slightly. Only if they describe a change WITHOUT giving exact words may you write new dialogue that fulfills the request, matching that character's established voice in the draft.
 - "set_captions": the owner wants specific existing line(s) shown as on-screen text instead of being spoken aloud - never valid if no draft exists.
-- "discuss": anything else - a question, an opinion, small talk, or anything that sounds like approving, producing, publishing, or spending real money. Real production ONLY ever starts from the ✅ button already shown under the screenplay, never from a message here - if the owner's words sound like approval or "do it now", intent is still "discuss" and "reply" must tell them, plainly, to press that ✅ button themselves. Never imply here that anything was approved, produced, or paid for.
+- "discuss": anything else - a question, an opinion, small talk, or anything that sounds like approving, producing, publishing, or spending real money.
+  - ONLY if the owner's words genuinely sound like approval or "do it now" (e.g. "ابدأ الإنتاج", "وافقت", "do it"): "reply" tells them, plainly, to press the ✅ button themselves - real production ONLY ever starts from that button, never from a message here. Never imply here that anything was approved, produced, or paid for.
+  - For every other "discuss" message - a question, confusion, a complaint, small talk, "which button?", "why aren't you answering?", anything that is NOT itself a request to approve or produce - "reply" must directly and specifically answer what the owner actually asked or said. Repeating the "press ✅" reminder when they asked something else entirely is itself a real failure mode that has happened live and made an owner feel unheard - never do it.
+  - A screenplay line marked "(نص على الشاشة، غير منطوق)" is an on-screen CAPTION (the owner's own choice, costs $0, see /caption), never a narrator. Do not mention "راوٍ"/narrator in "reply" unless the owner's own new message itself raises it - and when they do, answer plainly and specifically from the real cast and lines shown to you (e.g. name which character, if any, or state clearly that none exists) rather than a generic reassurance.
 - Never invent an "edits"/"caption_lines" entry for a line number that does not exist in the current draft shown to you - if the owner refers to a line that is not there, intent is "discuss" and "reply" says so."""
 
 # Matches an Arabic guillemet quote («...») or a straight/curly double-quote
 # ("..."), non-greedy so two separate quotes on one line count as two
 # moments, not one spanning both.
 _QUOTED_MOMENT_PATTERN = re.compile(r"«[^»]+»|\"[^\"]+\"|“[^”]+”")
+
+# Owner's real, repeated complaint, 2026-10-22 - see _write()'s own
+# comment at its real use site. 0.7 is a real engineering choice, not a
+# theoretical ideal: strict enough to reject the real reported case (one
+# voice the entire video, confirmed directly by the owner), loose enough
+# that a real scene with one naturally talkative character among several
+# genuinely participating ones is not rejected for a plausible,
+# legitimate imbalance.
+_MAX_SINGLE_CHARACTER_LINE_SHARE = 0.7
 
 # Owner's standing instruction, 2026-10-21: no narrator, ever, unless the
 # owner explicitly asks for one - a code-level gate, not a prompt request
@@ -415,6 +427,35 @@ class DialogueWriterAgent:
             if item["character"] not in cast_names:
                 raise DialogueWriterError(
                     f"Line speaker {item['character']!r} is not in the cast {cast_names}: {lines_raw!r}"
+                )
+
+        # Owner's real, repeated complaint, 2026-10-22 ("كله الفيديو كله
+        # صورة شخص يسرد قصة" - the whole video is one person's photo
+        # narrating a story; confirmed directly: "صوت واحد فقط طوال
+        # الفيديو" - only one voice the entire video): the existing
+        # _NARRATOR_NAME_PATTERN guard below only checks the cast's own
+        # NAMES - it says nothing about a real, legitimately-named
+        # character being used AS a narrator in practice, carrying
+        # nearly the whole screenplay alone while the rest of a real
+        # multi-person cast gets little or nothing to say. That is
+        # functionally a narrator wearing a human name, and the prompts'
+        # own "no narrator" instructions cannot be trusted alone to
+        # catch it - a prompt is an instruction the model can still get
+        # wrong, the same reason _NARRATOR_NAME_PATTERN exists as a
+        # code-level gate rather than a prompt request. Rejected here,
+        # deterministically, before any real cost is spent.
+        if len(cast_names) > 1:
+            line_counts: dict[str, int] = {}
+            for item in parsed_lines[:line_count]:
+                line_counts[item["character"]] = line_counts.get(item["character"], 0) + 1
+            dominant_name, dominant_count = max(line_counts.items(), key=lambda kv: kv[1])
+            dominant_share = dominant_count / line_count
+            if dominant_share > _MAX_SINGLE_CHARACTER_LINE_SHARE:
+                raise DialogueWriterError(
+                    f"شخصية واحدة ({dominant_name}) تحمل {dominant_count} من أصل {line_count} سطراً "
+                    f"({dominant_share:.0%}) - هذا صوت واحد يسرد القصة عملياً طوال الفيديو، حتى لو لم "
+                    "يحمل اسم \"راوي\" حرفياً، وهو بالضبط ما طلبت ألا يحدث أبداً. أعد صياغة الفكرة بحيث "
+                    "تتوزع الأحداث كحوار حقيقي بين الشخصيات المختلفة، لا شخصية واحدة تحكي عن البقية."
                 )
 
         characters = [
