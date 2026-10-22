@@ -16,12 +16,19 @@ WORKDIR /app
 # verified live (a real rendered frame, properly shaped Arabic, checked
 # before this was added) that fonts-noto-core's NotoNaskhArabic-Regular.ttf
 # actually fixes this, not guessed.
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-noto-core && rm -rf /var/lib/apt/lists/*
+# openssh-client: added 2026-10-22 for deploy_idle_watchdog_via_ssh()
+# (src/integrations/runpod_client.py) - the one real, automatic way to
+# install and launch the GPU pod's idle-shutdown safety net
+# (scripts/pod_idle_watchdog.py) on every production run, since Runpod's
+# REST v2 API itself has no field that stops a pod after a set time
+# (verified live against Runpod's own docs, 2026-10-22).
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg fonts-noto-core openssh-client && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY src ./src
+COPY scripts ./scripts
 
 # Owner's standing instruction, 2026-10-21 ("احذف الستة صور"): the
 # `assets/placeholder_characters/` directory this image used to COPY
