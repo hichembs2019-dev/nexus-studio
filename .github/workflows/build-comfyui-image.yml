@@ -1,0 +1,44 @@
+name: Build and push the custom ComfyUI+watchdog image
+
+# Builds Dockerfile.comfyui (the official Runpod ComfyUI image with the
+# idle-shutdown watchdog baked into its own entrypoint - see that
+# file's own docstring) and pushes it to GHCR, so a Runpod pod can be
+# created straight from it with no SSH step required.
+#
+# Free: this repo is public, so GHCR storage and Actions minutes for it
+# cost nothing real - unlike every Runpod call in this project, nothing
+# here is billable.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile.comfyui"
+      - "scripts/pod_idle_watchdog.py"
+      - ".github/workflows/build-comfyui-image.yml"
+  workflow_dispatch: {}
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/nexus-studio-comfyui
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+
+      - name: Build
+        run: docker build -f Dockerfile.comfyui -t "$IMAGE:latest" -t "$IMAGE:${{ github.sha }}" .
+
+      - name: Push
+        run: |
+          docker push "$IMAGE:latest"
+          docker push "$IMAGE:${{ github.sha }}"
+
+      - name: Real image reference for this run
+        run: echo "Pushed $IMAGE:${{ github.sha }} (also tagged :latest)"

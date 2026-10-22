@@ -1,0 +1,43 @@
+# Custom GPU-pod image: the official Runpod ComfyUI image, with the
+# idle-shutdown watchdog (scripts/pod_idle_watchdog.py) baked in and
+# launched automatically on every boot - no SSH involved.
+#
+# Why this exists (2026-10-22): deploy_idle_watchdog_via_ssh()
+# (src/integrations/runpod_client.py) was the first design for getting
+# the watchdog onto a running pod, but this Claude Code session has no
+# outbound SSH at all (confirmed live: a real SSH attempt to the pod,
+# using the exact keypair already registered on the Runpod account,
+# timed out - the session's own network proxy only tunnels HTTPS, never
+# raw TCP). Rather than depend on SSH being available wherever this
+# code eventually runs, the watchdog is baked straight into the image
+# instead, launched as part of the container's own startup.
+#
+# Base image's real contract, verified live (NOT guessed) via a one-off
+# GitHub Actions diagnostic (`docker inspect`/`docker history` on a
+# GitHub-hosted runner, since this session can neither run Docker nor
+# reach Docker Hub without hitting its own shared-IP rate limit):
+#   Entrypoint: ["/start.sh"]   Cmd: null   WorkingDir: /workspace/runpod-slim
+# `/start.sh` (COPY'd into the image at build time, not inspectable from
+# outside) owns the real first-boot logic - copying ComfyUI onto the
+# network volume, starting ComfyUI-Manager, filebrowser, Jupyter, sshd.
+# That logic is NEVER reimplemented or guessed at here - this image
+# only prepends one background job and then `exec`s the real, original
+# /start.sh completely unchanged, so every bit of that real behavior
+# (including the ~4-minute first-boot copy the golden path documents)
+# still happens exactly as it does in the official image.
+FROM runpod/comfyui:1.3.3-comfyuiv0.30.0-cuda13.0
+
+COPY scripts/pod_idle_watchdog.py /opt/pod_idle_watchdog.py
+
+# RUNPOD_API_KEY and RUNPOD_POD_ID are auto-injected by Runpod into the
+# container's own main process at boot (Runpod's own documented system
+# environment variables) - since the watchdog is launched here, as a
+# child of that same main process (via `exec`, not a separate SSH
+# login shell), it inherits them directly. No credential files, no
+# SSH, no extra setup step at pod-create time beyond this image.
+#
+# `exec /start.sh` is the load-bearing part: it replaces this wrapper
+# shell with the real original entrypoint as PID 1, so Docker/Runpod's
+# stop signal (SIGTERM) still reaches it directly, exactly as if this
+# image had never touched the entrypoint at all.
+ENTRYPOINT ["/bin/bash", "-c", "python3 /opt/pod_idle_watchdog.py >> /workspace/idle_watchdog.log 2>&1 & exec /start.sh"]
