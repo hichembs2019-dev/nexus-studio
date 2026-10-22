@@ -286,6 +286,37 @@ class DialogueWriterAgent:
     def __init__(self, reasoning_client: AgentReasoningClient):
         self._reasoning_client = reasoning_client
 
+    def _complete(self, system_prompt: str, user_prompt: str) -> str:
+        """Every real call into the reasoning client goes through here,
+        never `self._reasoning_client.complete()` directly.
+
+        Real incident, 2026-10-22: a real Gemini 500 ("INTERNAL") reached
+        the owner verbatim as `❌ حدث خطأ حقيقي غير متوقع: INTERNAL.
+        {'error': {'code': 500, ...}}` - runner.py's generic top-level
+        error handler, not the bot's own normal reply path. Both Groq
+        AND its Gemini fallback had genuinely failed (RealGeminiReasoningClient's
+        own 3 retries exhausted) - a real external-provider outage, not a
+        bug in either client. But nothing here ever caught that: only
+        JSON-parsing/validation failures were wrapped into
+        DialogueWriterError, so a raw network/provider exception
+        propagated straight out of route_message()/_write(), past
+        conversation.py's `except DialogueWriterError` guards (which
+        cannot catch an exception of a different type), all the way to
+        the generic handler - English, raw JSON, no indication of what
+        to do. Every real call site now goes through this wrapper so any
+        failure - whatever its real type - reaches the owner as one
+        clean, understandable Arabic message through the bot's normal
+        reply path instead."""
+        try:
+            return self._reasoning_client.complete(system_prompt, user_prompt)
+        except DialogueWriterError:
+            raise
+        except Exception as exc:
+            raise DialogueWriterError(
+                f"تعذّر الاتصال بالذكاء الاصطناعي حالياً (Groq/Gemini) - حاول مرة أخرى بعد قليل. "
+                f"لم يُصرف أي مال حقيقي. السبب التقني: {exc}"
+            ) from exc
+
     def route_message(self, screenplay: DialogueScreenplay | None, pending_text: str, new_message: str) -> RoutedMessage:
         parts: list[str] = []
         if screenplay is not None:
@@ -301,7 +332,7 @@ class DialogueWriterAgent:
         parts.append(f"[رسالة المالك الجديدة]\n{new_message}")
         user_prompt = "\n\n".join(parts)
 
-        raw = self._reasoning_client.complete(_ROUTER_SYSTEM_PROMPT, user_prompt)
+        raw = self._complete(_ROUTER_SYSTEM_PROMPT, user_prompt)
         data = parse_json_object(raw, ("intent", "reply"), error_cls=DialogueWriterError)
 
         intent = data.get("intent")
@@ -368,12 +399,12 @@ class DialogueWriterAgent:
         return self._write(title, premise, line_count, _COMPLETE_LINES_SYSTEM_PROMPT)
 
     def _write(self, title: str, premise: str, line_count: int, lines_system_prompt_template: str) -> DialogueScreenplay:
-        cast_raw = self._reasoning_client.complete(_CAST_SYSTEM_PROMPT, premise)
+        cast_raw = self._complete(_CAST_SYSTEM_PROMPT, premise)
         cast = self._parse_cast(cast_raw)
         cast_names = [c["name"] for c in cast]
 
         lines_system_prompt = lines_system_prompt_template.format(line_count=line_count, cast=", ".join(cast_names))
-        lines_raw = self._reasoning_client.complete(lines_system_prompt, premise)
+        lines_raw = self._complete(lines_system_prompt, premise)
         parsed_lines = parse_json_object_array(
             lines_raw, ("character", "line", "action"), error_cls=DialogueWriterError
         )

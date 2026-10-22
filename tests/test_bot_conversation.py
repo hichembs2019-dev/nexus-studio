@@ -41,6 +41,41 @@ def test_new_with_explicit_seconds_writes_a_screenplay_sized_to_them():
     assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
 
 
+class _AlwaysFailingReasoningClient:
+    """Real incident, 2026-10-22: Groq AND its Gemini fallback both
+    genuinely failed on one real request, and the raw exception (a
+    google.genai.errors.ServerError, not a DialogueWriterError) reached
+    the owner verbatim through runner.py's generic top-level error
+    handler - "❌ حدث خطأ حقيقي غير متوقع: INTERNAL. {...}" - not the
+    bot's own normal reply path. Simulates that here with a plain
+    RuntimeError, the same shape any real provider outage takes."""
+
+    def complete(self, system_prompt, user_prompt):
+        raise RuntimeError("Internal error encountered. {'error': {'code': 500, 'status': 'INTERNAL'}}")
+
+
+def test_new_turns_a_real_provider_failure_into_a_clean_reply_not_a_crash():
+    conversation = BotConversation(
+        DialogueWriterAgent(_AlwaysFailingReasoningClient()), PublishingAgent({})
+    )
+
+    reply = conversation.handle_new("chat1", "30 قصة رائد فضاء")
+
+    assert "تعذّر الاتصال بالذكاء الاصطناعي" in reply.text
+    assert reply.buttons is None
+
+
+def test_full_turns_a_real_provider_failure_into_a_clean_reply_not_a_crash():
+    conversation = BotConversation(
+        DialogueWriterAgent(_AlwaysFailingReasoningClient()), PublishingAgent({})
+    )
+
+    reply = conversation.handle_full("chat1", 'قال: «مرحبا يا فوزية»')
+
+    assert "تعذّر الاتصال بالذكاء الاصطناعي" in reply.text
+    assert reply.buttons is None
+
+
 def test_new_cost_estimate_uses_the_real_price_per_second_explicitly_passed_in():
     # Real gap found by code review, 2026-10-21: BotConversation must
     # never hard-code a provider's own price constant directly in

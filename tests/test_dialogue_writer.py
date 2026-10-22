@@ -15,6 +15,39 @@ def _cast_reply(*people):
     )
 
 
+class _AlwaysFailingReasoningClient:
+    """Simulates a real provider failure (e.g. Groq AND its Gemini
+    fallback both exhausted, a real network error) - something that is
+    NOT a DialogueWriterError, the same shape as the real incident,
+    2026-10-22: a raw google.genai.errors.ServerError reaching the owner
+    verbatim via runner.py's generic top-level handler instead of a
+    clean Arabic message through the bot's normal reply path."""
+
+    def complete(self, system_prompt, user_prompt):
+        raise RuntimeError("Internal error encountered. {'error': {'code': 500, 'status': 'INTERNAL'}}")
+
+
+def test_route_message_wraps_a_real_provider_failure_into_a_dialogue_writer_error():
+    agent = DialogueWriterAgent(_AlwaysFailingReasoningClient())
+
+    with pytest.raises(DialogueWriterError, match="تعذّر الاتصال بالذكاء الاصطناعي"):
+        agent.route_message(None, "", "مرحباً")
+
+
+def test_write_dialogue_screenplay_wraps_a_real_provider_failure_into_a_dialogue_writer_error():
+    agent = DialogueWriterAgent(_AlwaysFailingReasoningClient())
+
+    with pytest.raises(DialogueWriterError, match="تعذّر الاتصال بالذكاء الاصطناعي"):
+        agent.write_dialogue_screenplay("T", "premise", 3)
+
+
+def test_write_complete_dialogue_screenplay_wraps_a_real_provider_failure_into_a_dialogue_writer_error():
+    agent = DialogueWriterAgent(_AlwaysFailingReasoningClient())
+
+    with pytest.raises(DialogueWriterError, match="تعذّر الاتصال بالذكاء الاصطناعي"):
+        agent.write_complete_dialogue_screenplay("T", 'قال "مرحبا"')
+
+
 def test_write_dialogue_screenplay_builds_cast_then_lines():
     cast_reply = _cast_reply(("فوزية", "female"), ("جويدة", "female"))
     lines_reply = json.dumps(

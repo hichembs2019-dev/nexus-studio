@@ -380,7 +380,21 @@ class BotConversation:
                 )
             )
 
-        screenplay = self._dialogue_writer.write_dialogue_screenplay(title, premise, line_count)
+        # Real incident, 2026-10-22: a real Gemini 500 (after Groq's own
+        # fallback to it also failed) reached the owner as a raw,
+        # uncaught exception via runner.py's generic top-level error
+        # handler - "❌ حدث خطأ حقيقي غير متوقع: INTERNAL. {...}" - not
+        # the bot's normal reply path. DialogueWriterAgent now wraps
+        # every real reasoning-client call so any failure becomes a real
+        # DialogueWriterError (see its own _complete() docstring), but
+        # that is only useful if it is actually caught here - /new and
+        # /full never had this guard at all, unlike the equivalent
+        # free-conversation build_screenplay branch in handle_message()
+        # above, which already catches it.
+        try:
+            screenplay = self._dialogue_writer.write_dialogue_screenplay(title, premise, line_count)
+        except DialogueWriterError as exc:
+            return BotReply(text=str(exc))
         state.screenplay = screenplay
         state.pending_text = ""
         return BotReply(text=self._format_screenplay(screenplay), buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])
@@ -398,7 +412,12 @@ class BotConversation:
             return BotReply(text="الاستخدام: أرسل قصتك كاملة كرسالة عادية (يمكن أن تكون طويلة وتنقسم لعدة رسائل)، ثم أرسل /full لبناء السيناريو من كل كلمة فيها بدون حذف.")
 
         title = premise[:50]
-        screenplay = self._dialogue_writer.write_complete_dialogue_screenplay(title, premise)
+        # Real incident, 2026-10-22: see handle_new()'s own comment above
+        # - /full had the identical gap.
+        try:
+            screenplay = self._dialogue_writer.write_complete_dialogue_screenplay(title, premise)
+        except DialogueWriterError as exc:
+            return BotReply(text=str(exc))
         state.screenplay = screenplay
         state.pending_text = ""
         return BotReply(text=self._format_screenplay(screenplay), buttons=[("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")])

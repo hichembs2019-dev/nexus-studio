@@ -358,7 +358,18 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         # the event loop stays free to answer a callback query (which
         # Telegram invalidates if left unanswered too long) the whole time.
         loop = asyncio.get_running_loop()
-        reply = await loop.run_in_executor(None, conversation.handle_new, chat_id, args_text)
+        # Real incident, 2026-10-22: conversation.py now wraps every real
+        # reasoning-client failure into a clean DialogueWriterError (see
+        # dialogue_writer.py's own _complete()), so handle_new() itself
+        # no longer raises for a real Groq/Gemini outage - but this
+        # try/except is kept anyway, matching _route_after_debounce's own
+        # defense-in-depth above, for any OTHER unexpected failure inside
+        # handle_new() that is not that specific, already-handled class.
+        try:
+            reply = await loop.run_in_executor(None, conversation.handle_new, chat_id, args_text)
+        except Exception as exc:
+            await _notify_or_log(chat_id, context, f"⚠️ تعذّر بناء السيناريو بسبب خطأ تقني: {exc}")
+            return
         await _send_reply(chat_id, context, reply)
 
     async def _full(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -373,7 +384,12 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         # Same event-loop-blocking real reasoning-client call, same fix,
         # as _new above.
         loop = asyncio.get_running_loop()
-        reply = await loop.run_in_executor(None, conversation.handle_full, chat_id, args_text)
+        # Same real incident and same reasoning as _new above.
+        try:
+            reply = await loop.run_in_executor(None, conversation.handle_full, chat_id, args_text)
+        except Exception as exc:
+            await _notify_or_log(chat_id, context, f"⚠️ تعذّر بناء السيناريو بسبب خطأ تقني: {exc}")
+            return
         await _send_reply(chat_id, context, reply)
 
     async def _text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
