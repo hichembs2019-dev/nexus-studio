@@ -1,0 +1,33 @@
+name: Diagnostic - fetch multitalk's real input schema
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  diagnostic:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch real model schema
+        env:
+          REPLICATE_API_TOKEN: ${{ secrets.REPLICATE_API_TOKEN }}
+        run: |
+          python3 - <<'PYEOF'
+          import json
+          import os
+          import urllib.request
+
+          token = os.environ["REPLICATE_API_TOKEN"]
+          req = urllib.request.Request(
+              "https://api.replicate.com/v1/models/zsxkib/multitalk",
+              headers={"Authorization": f"Bearer {token}"},
+          )
+          with urllib.request.urlopen(req, timeout=30) as resp:
+              payload = json.load(resp)
+
+          print("=== top-level keys ===")
+          print(list(payload.keys()))
+          schema = payload.get("latest_version", {}).get("openapi_schema", {})
+          input_schema = schema.get("components", {}).get("schemas", {}).get("Input", {})
+          print("=== REAL Input schema ===")
+          print(json.dumps(input_schema, indent=2, ensure_ascii=False))
+          PYEOF
