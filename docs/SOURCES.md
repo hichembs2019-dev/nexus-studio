@@ -1506,3 +1506,19 @@ Per the owner's choice ("الصورة الجاهزة ابنيها" - build the r
 **Deleted the one-off diagnostic workflow** (`diagnostic-comfyui-image-inspect.yml`) once its real findings were captured, matching this project's established pattern.
 
 **Still unverified, named honestly**: the image has been built and pushed (real GHCR package, built on a real GitHub-hosted runner), but no Runpod pod has yet been created FROM it - the watchdog's real self-stop behavior against this specific image is proven in isolation (unit tests, mutation-tested) but not yet proven end-to-end on a live pod using this image. That is the next real step, and it is a real, billable Runpod pod create like the two before it in this session.
+
+## The idle watchdog proven end to end, for real, zero SSH (2026-10-22)
+
+Created a real pod (`z65ig0mfs74dhc`) directly from the custom image (`ghcr.io/hichembs2019-dev/nexus-studio-comfyui:latest`, no Runpod template), same A40/CA-MTL-1/network-volume shape as before. Confirmed live via `/system_stats` through the real proxy URL: ComfyUI up, real A40 attached - same as the official-template pods earlier, proving the custom image's wrapped entrypoint did not break the base image's own startup.
+
+Then genuinely left it alone - no real ComfyUI job submitted, no `pod-action stop` called by this session for this pod at any point - and watched its real `status` over time via `get-pod`:
+
+- Created `2026-10-22T16:24:47Z`, `status: RUNNING`.
+- Checked `~16:41Z` (≈16 min in): still `RUNNING` - expected, inside the real window.
+- Checked again a few minutes later (owner asked directly, mid-wait, seeing the real balance still moving on their own Billing page): `status: EXITED`, `runtime: null`, `actions: ["start","terminate"]` - the real, terminal signature of a pod that stopped **itself**.
+
+**Real correction to the design's own stated timing, caught here rather than left wrong**: the idle-shutdown entry above said the watchdog fires after "up to 25 minutes" (grace period + idle timeout, treated as additive). Re-reading `IdleTracker.observe()` while explaining the wait to the owner found that is not how the real logic works: `_last_busy_at` starts at `_started_at` and is never reset (nothing ever reports real work, since no job was submitted), so the real trigger condition becomes `now - started_at >= IDLE_TIMEOUT_S` (900s / 15 min) the moment that is also past `GRACE_PERIOD_S` (600s / 10 min) - which it always is, since 900 > 600. **The real, correct worst-case is ~15 minutes, not ~25** - the grace period only matters as an independent floor if `IDLE_TIMEOUT_S` were ever configured shorter than `GRACE_PERIOD_S`, which production's own defaults never do. Behavior itself was never wrong - only the English description of it, here and in the earlier SOURCES.md entry and in what was told to the owner live. Corrected in both places.
+
+**Real cost of this specific proof run**: pod billed for roughly 15-18 minutes of real A40 time at $0.59/hr - under $0.20, exactly the ceiling stated to the owner before letting it run unattended.
+
+**What this closes out**: the owner's original, hard, explicit condition on creating any GPU pod at all - "يجب ان تضع له كود ايقاف عند عدم الاستعمال... يجب عليك ان تصع كود ايف اوتوماتيكي ان لم يستعمل لا يمس الرصيد" - is now proven, not just built. A real pod, created from the real production image, with no human and no script ever telling it to stop, stopped itself. The pod is now `EXITED` (not terminated) - its `/workspace` network volume (with ComfyUI already copied onto it) is intact and ready for the next real step: restoring the deleted Wan 2.2 pipeline code (task #39) so there is finally real work for this pod to do.
