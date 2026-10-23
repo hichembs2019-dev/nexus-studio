@@ -12,6 +12,7 @@ from src.integrations.replicate_image_client import (
     MockReplicateImageClient,
     ReplicateImageError,
 )
+from src.integrations.multitalk_video_client import MockMultiTalkVideoClient
 from src.integrations.replicate_video_client import PROVISIONAL_PRICE_PER_SECOND_USD, MockReplicateVideoClient
 from src.integrations.tts_client import MockTTSClient
 from src.models import Character, DialogueLine, DialogueScreenplay
@@ -923,3 +924,281 @@ def test_produce_falls_back_to_the_audio_duration_when_only_the_video_probe_fail
     assert len(produced.clips) == 1
     assert produced.clips[0].cost_usd > 0.0  # a real, measured cost - not the $0 last-resort case
     assert len(produced.failed_lines) == 0  # fully recovered, nothing left to report as failed
+
+
+# Real wiring, 2026-10-23: MultiTalk two-speaker pairing tests. Every
+# real behavioral guarantee here exists BECAUSE of the real crash/fix
+# history in docs/SOURCES.md - see dialogue_pipeline.py's own comment at
+# the real pairing site for why pairing is scoped to exactly two
+# CONSECUTIVE lines, same scene, different speakers (never a whole
+# multi-turn scene in one MultiTalk call).
+
+
+def _two_speaker_screenplay(**line_kwargs) -> DialogueScreenplay:
+    lines = line_kwargs.get("lines") or [
+        DialogueLine(index=0, character="فوزية", line="مرحبا", action="smiling", scene=0),
+        DialogueLine(index=1, character="جويدة", line="أهلا", action="waving", scene=0),
+    ]
+    return DialogueScreenplay(
+        title="T", premise="p",
+        characters=[
+            Character(name="فوزية", appearance="curly dark hair"),
+            Character(name="جويدة", appearance="straight brown hair"),
+        ],
+        lines=lines,
+    )
+
+
+def test_produce_pairs_two_consecutive_different_speakers_into_one_real_multitalk_clip(tmp_path):
+    portrait_path = str(tmp_path / "portrait.jpg")
+    multitalk_mp4 = _silent_mp4(str(tmp_path / "mt.mp4"), duration_seconds=4.0)
+
+    fal_video = MockReplicateVideoClient()
+    tts = MockTTSClient()
+    image_client = MockReplicateImageClient(scripted_bytes=_real_jpeg_bytes(portrait_path))
+    multitalk = MockMultiTalkVideoClient(scripted_bytes=multitalk_mp4)
+    pipeline = DialoguePipeline(
+        fal_video, tts, str(tmp_path), image_client=image_client, multitalk_client=multitalk
+    )
+    screenplay = _two_speaker_screenplay()
+
+    produced = pipeline.produce(screenplay)
+
+    # One real clip covering both lines - NOT two separate single-speaker
+    # clips, and the single-speaker fal_video client must never be called
+    # for either of these two lines.
+    assert len(produced.clips) == 1
+    assert len(fal_video.calls) == 0
+    assert len(multitalk.calls) == 1
+    clip = produced.clips[0]
+    assert [l.index for l in clip.covered_lines] == [0, 1]
+    assert clip.cost_usd == pytest.approx(4.0 * PROVISIONAL_PRICE_PER_SECOND_USD)
+    assert produced.stitched_path == clip.local_path
+
+
+def test_produce_sends_each_speakers_own_real_audio_separately_to_multitalk(tmp_path):
+    portrait_path = str(tmp_path / "portrait.jpg")
+    multitalk_mp4 = _silent_mp4(str(tmp_path / "mt.mp4"), duration_seconds=2.0)
+
+    tts = MockTTSClient(scripted_bytes=b"\xff\xfbfake-mp3")
+    multitalk = MockMultiTalkVideoClient(scripted_bytes=multitalk_mp4)
+    pipeline = DialoguePipeline(
+        MockReplicateVideoClient(), tts, str(tmp_path),
+        image_client=MockReplicateImageClient(scripted_bytes=_real_jpeg_bytes(portrait_path)),
+        multitalk_client=multitalk,
+    )
+    screenplay = _two_speaker_screenplay()
+
+    pipeline.produce(screenplay)
+
+    assert tts.calls == [("مرحبا", "ar-TN-HediNeural", "ar-SY"), ("أهلا", "ar-TN-HediNeural", "ar-SY")]
+    call = multitalk.calls[0]
+    assert call["speaker_1_audio_bytes"] == b"\xff\xfbfake-mp3"
+    assert call["speaker_2_audio_bytes"] == b"\xff\xfbfake-mp3"
+
+
+def test_produce_does_not_pair_lines_from_different_scenes(tmp_path):
+    # Real correctness requirement, not just an optimization: pairing
+    # across a real scene break would put two characters from two
+    # different real scenes into one shared-location video.
+    portrait_path = str(tmp_path / "portrait.jpg")
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
+    multitalk = MockMultiTalkVideoClient()
+    pipeline = DialoguePipeline(
+        fal_video, MockTTSClient(), str(tmp_path),
+        image_client=MockReplicateImageClient(scripted_bytes=_real_jpeg_bytes(portrait_path)),
+        multitalk_client=multitalk,
+    )
+    screenplay = _two_speaker_screenplay(
+        lines=[
+            DialogueLine(index=0, character="فوزية", line="مرحبا", action="a", scene=0),
+            DialogueLine(index=1, character="جويدة", line="أهلا", action="b", scene=1),
+        ]
+    )
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(multitalk.calls) == 0
+    assert len(fal_video.calls) == 2
+    assert len(produced.clips) == 2
+
+
+def test_produce_does_not_pair_the_same_speaker_with_themselves(tmp_path):
+    portrait_path = str(tmp_path / "portrait.jpg")
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
+    multitalk = MockMultiTalkVideoClient()
+    pipeline = DialoguePipeline(
+        fal_video, MockTTSClient(), str(tmp_path),
+        image_client=MockReplicateImageClient(scripted_bytes=_real_jpeg_bytes(portrait_path)),
+        multitalk_client=multitalk,
+    )
+    screenplay = _two_speaker_screenplay(
+        lines=[
+            DialogueLine(index=0, character="فوزية", line="واحد", action="a", scene=0),
+            DialogueLine(index=1, character="فوزية", line="اثنان", action="b", scene=0),
+        ]
+    )
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(multitalk.calls) == 0
+    assert len(fal_video.calls) == 2
+
+
+def test_produce_does_not_pair_a_spoken_line_with_a_following_caption(tmp_path):
+    portrait_path = str(tmp_path / "portrait.jpg")
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
+    multitalk = MockMultiTalkVideoClient()
+    pipeline = DialoguePipeline(
+        fal_video, MockTTSClient(), str(tmp_path),
+        image_client=MockReplicateImageClient(scripted_bytes=_real_jpeg_bytes(portrait_path)),
+        multitalk_client=multitalk,
+    )
+    screenplay = _two_speaker_screenplay(
+        lines=[
+            DialogueLine(index=0, character="فوزية", line="مرحبا", action="a", scene=0),
+            DialogueLine(index=1, character="جويدة", line="أهلا", action="b", scene=0, spoken=False),
+        ]
+    )
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(multitalk.calls) == 0
+    assert len(fal_video.calls) == 1
+
+
+def test_produce_falls_back_to_single_speaker_when_no_multitalk_client_is_configured(tmp_path):
+    # Real backward-compatibility guarantee: multitalk_client defaults to
+    # None, so every existing production run (and every existing test)
+    # keeps behaving exactly as before.
+    portrait_path = str(tmp_path / "portrait.jpg")
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
+    pipeline = DialoguePipeline(
+        fal_video, MockTTSClient(), str(tmp_path),
+        image_client=MockReplicateImageClient(scripted_bytes=_real_jpeg_bytes(portrait_path)),
+    )
+    screenplay = _two_speaker_screenplay()
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(fal_video.calls) == 2
+    assert len(produced.clips) == 2
+
+
+def test_produce_falls_back_when_one_characters_real_photo_is_missing(tmp_path):
+    # A pair needs BOTH real photos - if one character's portrait
+    # genuinely failed, the pair never forms; the single-speaker path
+    # then correctly fails only that one character's line while still
+    # attempting the other's.
+    portrait_path = str(tmp_path / "portrait.jpg")
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    fal_video = MockReplicateVideoClient(scripted_bytes=clip_bytes)
+    multitalk = MockMultiTalkVideoClient()
+    pipeline = DialoguePipeline(
+        fal_video, MockTTSClient(), str(tmp_path),
+        image_client=None,  # no image client at all - no real photo for anyone
+        multitalk_client=multitalk,
+    )
+    screenplay = _two_speaker_screenplay()
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(multitalk.calls) == 0
+    assert len(produced.failed_lines) == 2
+
+
+def test_produce_skips_a_real_pair_together_once_the_cost_ceiling_is_reached(tmp_path):
+    # Real gap this test must actually exercise: the ceiling is reached
+    # AFTER both real portraits (zero-cost prerequisites for pairing at
+    # all) but BEFORE the real video call - a ceiling of exactly 0.0
+    # would instead be caught by the earlier portrait-generation ceiling
+    # check, never reaching the pair-specific one this test exists for.
+    portrait_path = str(tmp_path / "portrait.jpg")
+    multitalk_mp4 = _silent_mp4(str(tmp_path / "mt.mp4"), duration_seconds=4.0)
+    multitalk = MockMultiTalkVideoClient(scripted_bytes=multitalk_mp4)
+    pipeline = DialoguePipeline(
+        MockReplicateVideoClient(), MockTTSClient(), str(tmp_path),
+        image_client=MockReplicateImageClient(scripted_bytes=_real_jpeg_bytes(portrait_path)),
+        multitalk_client=multitalk,
+        max_cost_usd=2 * PRICE_PER_IMAGE_USD_UNVERIFIED,  # covers both real portraits, nothing left for video
+    )
+    screenplay = _two_speaker_screenplay()
+
+    produced = pipeline.produce(screenplay)
+
+    assert produced.portrait_cost_usd == pytest.approx(2 * PRICE_PER_IMAGE_USD_UNVERIFIED)  # both real photos generated
+    assert len(multitalk.calls) == 0
+    assert [l.index for l in produced.skipped_lines] == [0, 1]
+    assert produced.clips == []
+
+
+def test_produce_fails_both_paired_lines_when_the_real_multitalk_call_fails(tmp_path):
+    portrait_path = str(tmp_path / "portrait.jpg")
+    multitalk = MockMultiTalkVideoClient(fail_at_calls=frozenset({0}))
+    pipeline = DialoguePipeline(
+        MockReplicateVideoClient(), MockTTSClient(), str(tmp_path),
+        image_client=MockReplicateImageClient(scripted_bytes=_real_jpeg_bytes(portrait_path)),
+        multitalk_client=multitalk,
+    )
+    screenplay = _two_speaker_screenplay()
+
+    produced = pipeline.produce(screenplay)
+
+    assert produced.clips == []
+    assert len(produced.failed_lines) == 2
+    assert [l.index for l, _ in produced.failed_lines] == [0, 1]
+    # the real call raised before any billing happened - must not carry
+    # the "money already spent" note
+    for _, message in produced.failed_lines:
+        assert "تم صرف مال حقيقي" not in message
+
+
+def test_produce_reports_billed_money_when_only_the_real_multitalk_probe_fails(tmp_path, monkeypatch):
+    portrait_path = str(tmp_path / "portrait.jpg")
+    multitalk_mp4 = _silent_mp4(str(tmp_path / "mt.mp4"), duration_seconds=3.0)
+    multitalk = MockMultiTalkVideoClient(scripted_bytes=multitalk_mp4)
+    pipeline = DialoguePipeline(
+        MockReplicateVideoClient(), MockTTSClient(), str(tmp_path),
+        image_client=MockReplicateImageClient(scripted_bytes=_real_jpeg_bytes(portrait_path)),
+        multitalk_client=multitalk,
+    )
+    screenplay = _two_speaker_screenplay()
+
+    import src.workflows.dialogue_pipeline as dialogue_pipeline_module
+
+    monkeypatch.setattr(
+        dialogue_pipeline_module, "_ffprobe_duration",
+        lambda path: (_ for _ in ()).throw(RuntimeError("ffprobe missing")),
+    )
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(produced.clips) == 1  # the real, already-paid file is still delivered
+    assert produced.clips[0].cost_usd == 0.0
+    assert len(produced.failed_lines) == 1
+    _, message = produced.failed_lines[0]
+    assert "تم صرف مال حقيقي" in message
+
+
+def test_build_two_speaker_reference_caches_the_real_composite_and_masks(tmp_path):
+    portrait_1 = str(tmp_path / "p1.jpg")
+    portrait_2 = str(tmp_path / "p2.jpg")
+    _real_jpeg_bytes(portrait_1)
+    _real_jpeg_bytes(portrait_2)
+    pipeline = DialoguePipeline(MockReplicateVideoClient(), MockTTSClient(), str(tmp_path))
+
+    ref_path, mask_1, mask_2 = pipeline._build_two_speaker_reference(portrait_1, portrait_2, "ep", "a", "b")
+
+    assert os.path.isfile(ref_path)
+    assert os.path.isfile(mask_1)
+    assert os.path.isfile(mask_2)
+    mtime_before = os.path.getmtime(ref_path)
+
+    # second call for the exact same pair must be a real cache hit - not rebuilt
+    ref_path_2, _, _ = pipeline._build_two_speaker_reference(portrait_1, portrait_2, "ep", "a", "b")
+    assert ref_path_2 == ref_path
+    assert os.path.getmtime(ref_path) == mtime_before

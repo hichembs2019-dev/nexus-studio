@@ -31,10 +31,11 @@ import mimetypes
 import os
 import subprocess
 
+from src.integrations.multitalk_video_client import MultiTalkVideoClient
 from src.integrations.replicate_image_client import PRICE_PER_IMAGE_USD_UNVERIFIED, ReplicateImageClient
 from src.integrations.replicate_video_client import PROVISIONAL_PRICE_PER_SECOND_USD, ReplicateVideoClient
 from src.integrations.tts_client import TTSClient
-from src.models import Character, DialogueScreenplay, ProducedDialogueClip, ProducedDialogueEpisode
+from src.models import Character, DialogueLine, DialogueScreenplay, ProducedDialogueClip, ProducedDialogueEpisode
 
 CINEMATIC_STYLE_SUFFIX = ", cinematic lighting, warm color grading, emotional close-up shot, high production value television drama"
 
@@ -163,6 +164,25 @@ def _ffprobe_duration(path: str) -> float:
     return float(result.stdout.strip())
 
 
+def _ffprobe_dimensions(path: str) -> tuple[int, int]:
+    """Real width/height of an already-generated image, measured - never
+    assumed. Needed to build a real two-speaker reference's per-speaker
+    masks at the exact real pixel size MultiTalk's own `ref_target_masks`
+    input requires (see multitalk_prompt_builder.py's own docstring for
+    why that input is required at all, not guessed from a fixed constant
+    that could silently drift from whatever size Replicate's portrait
+    model actually returns."""
+    result = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height", "-of", "csv=s=x:p=0", path],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0 or "x" not in result.stdout:
+        raise RuntimeError(f"ffprobe dimensions failed on {path}: {result.stderr[-500:]}")
+    width_str, height_str = result.stdout.strip().split("x")
+    return int(width_str), int(height_str)
+
+
 class DialoguePipeline:
     def __init__(
         self,
@@ -174,6 +194,18 @@ class DialoguePipeline:
         resolution: str = "480p",
         max_cost_usd: float | None = None,
         image_client: ReplicateImageClient | None = None,
+        # Real wiring, 2026-10-23, once MultiTalk's two real crashes were
+        # fixed and a real two-speaker video was proven end to end (see
+        # docs/SOURCES.md, "MultiTalk two-speaker generation proven real,
+        # end to end"): None (the default) keeps every existing behavior
+        # completely unchanged - every spoken line still produces its own
+        # isolated single-speaker clip, exactly as before. Only when this
+        # is actually configured (src/app.py's own explicit gate) does
+        # produce() look for real consecutive two-character exchanges to
+        # route through one real shared-scene MultiTalk clip instead -
+        # see this class's own produce() docstring for exactly which
+        # exchanges qualify and why.
+        multitalk_client: MultiTalkVideoClient | None = None,
         # Real finding, 2026-10-21 ("و لماذا تتسرب الأسعار ... ألم تقل لك
         # من قبل؟"): the real rate for whichever client is actually wired
         # in must be passed explicitly by the caller (src/app.py) - never
@@ -207,6 +239,7 @@ class DialoguePipeline:
         # shown before Approve - so a long or malformed screenplay can
         # never silently run the real bill past what was agreed to.
         self._max_cost_usd = max_cost_usd
+        self._multitalk_client = multitalk_client
 
     def save_character_photo(self, title: str, character_name: str, image_bytes: bytes) -> str:
         """Owner's instruction, 2026-10-21 ("الصور ضعها انت الان و هكذا
@@ -292,7 +325,26 @@ class DialoguePipeline:
         if resolved_caption_photos:
             caption_group_image = self._build_caption_group_image(resolved_caption_photos, slug, included_caption_names)
 
-        for line in screenplay.lines:
+        # Real design point, 2026-10-23: scenes are not produced as one
+        # real unit, even when a real MultiTalk client is configured.
+        # MultiTalk's own "add" multi_audio_type - proven live via the
+        # real output waveform's own length (`final waveform shape ...
+        # expected sum of raw`, see docs/SOURCES.md) - is literal
+        # concatenation: speaker 1's WHOLE track, then speaker 2's WHOLE
+        # track, back to back. A real scene with more than one real
+        # back-and-forth exchange (فوزية / جويدة / فوزية / ...) fed to ONE
+        # MultiTalk call this way would play every one of فوزية's lines
+        # first, then every one of جويدة's - scrambling the real written
+        # order, not representing it. So pairing is scoped to exactly
+        # TWO CONSECUTIVE real lines, same real scene, two DIFFERENT real
+        # speakers - the one shape "add" mode actually reproduces
+        # correctly (line A's real audio, then line B's real audio, in
+        # the real order they were written) - never a whole multi-turn
+        # scene in one call.
+        i = 0
+        n = len(screenplay.lines)
+        while i < n:
+            line = screenplay.lines[i]
             character = characters_by_name.get(line.character)
             if character is None:
                 raise DialoguePipelineError(f"Line {line.index} speaker {line.character!r} is not in the cast")
@@ -312,6 +364,7 @@ class DialoguePipeline:
                     failed_lines.append(
                         (line, "لا توجد صورة حقيقية لأي من الشخصيات التي نصها مكتوب على الشاشة - لا توجد صورة احتياطية بأمر المالك")
                     )
+                    i += 1
                     continue
                 try:
                     prefix = f"{slug}_line{line.index:03d}"
@@ -321,6 +374,82 @@ class DialoguePipeline:
                     clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=0.0))
                 except Exception as exc:
                     failed_lines.append((line, str(exc)))
+                i += 1
+                continue
+
+            next_line = screenplay.lines[i + 1] if i + 1 < n else None
+            pairs_with_next = (
+                self._multitalk_client is not None
+                and next_line is not None
+                and next_line.spoken
+                and next_line.scene == line.scene
+                and next_line.character != line.character
+            )
+            next_character = characters_by_name.get(next_line.character) if pairs_with_next else None
+            if pairs_with_next and next_character is None:
+                raise DialoguePipelineError(f"Line {next_line.index} speaker {next_line.character!r} is not in the cast")
+            photo_path = resolved_photos.get(character.name)
+            next_photo_path = resolved_photos.get(next_character.name) if pairs_with_next else None
+            pairs_with_next = pairs_with_next and photo_path is not None and next_photo_path is not None
+
+            if pairs_with_next:
+                if self._max_cost_usd is not None and spent_so_far >= self._max_cost_usd:
+                    skipped_lines.append(line)
+                    skipped_lines.append(next_line)
+                    i += 2
+                    continue
+                billed = False
+                try:
+                    audio_a = self._tts.synthesize(line.line, character.voice, lang=self._tts_lang)
+                    audio_b = self._tts.synthesize(next_line.line, next_character.voice, lang=self._tts_lang)
+                    ref_path, mask_a_path, mask_b_path = self._build_two_speaker_reference(
+                        photo_path, next_photo_path, slug,
+                        _slug(character.name, default="character"), _slug(next_character.name, default="character"),
+                    )
+                    with open(ref_path, "rb") as f:
+                        ref_bytes = f.read()
+                    with open(mask_a_path, "rb") as f:
+                        mask_a_bytes = f.read()
+                    with open(mask_b_path, "rb") as f:
+                        mask_b_bytes = f.read()
+
+                    prompt = (
+                        f"{character.name} and {next_character.name} talking to each other in a real scene"
+                    ) + CINEMATIC_STYLE_SUFFIX
+                    clip_bytes = self._multitalk_client.generate_two_speaker_video(
+                        prompt=prompt,
+                        reference_image_bytes=ref_bytes, reference_image_mime="image/jpeg",
+                        speaker_1_audio_bytes=audio_a, speaker_1_audio_mime="audio/mpeg", speaker_1_mask_bytes=mask_a_bytes,
+                        speaker_2_audio_bytes=audio_b, speaker_2_audio_mime="audio/mpeg", speaker_2_mask_bytes=mask_b_bytes,
+                    )
+                    billed = True
+                    prefix = f"{slug}_line{line.index:03d}_{next_line.index:03d}_multitalk"
+                    clip_path = os.path.join(self._output_dir, f"{prefix}.mp4")
+                    with open(clip_path, "wb") as f:
+                        f.write(clip_bytes)
+                    try:
+                        duration = _ffprobe_duration(clip_path)
+                        cost = duration * self._price_per_second_usd
+                        clips.append(ProducedDialogueClip(
+                            line=line, local_path=clip_path, cost_usd=cost, covered_lines=[line, next_line]
+                        ))
+                        spent_so_far += cost
+                    except Exception as probe_exc:
+                        clips.append(ProducedDialogueClip(
+                            line=line, local_path=clip_path, cost_usd=0.0, covered_lines=[line, next_line]
+                        ))
+                        failed_lines.append((
+                            line,
+                            f"[تم صرف مال حقيقي وحُفظ الفيديو الحقيقي فعليًا - مرفق أدناه - لكن تعذّر قياس مدته "
+                            f"الفعلية، فلم تُحتسب تكلفته في المجموع] {probe_exc}",
+                        ))
+                except Exception as exc:
+                    message = str(exc)
+                    if billed:
+                        message = f"[تم صرف مال حقيقي عند الإنتاج الذاتي قبل هذا الفشل] {message}"
+                    failed_lines.append((line, message))
+                    failed_lines.append((next_line, message))
+                i += 2
                 continue
 
             if self._max_cost_usd is not None and spent_so_far >= self._max_cost_usd:
@@ -330,6 +459,7 @@ class DialoguePipeline:
                 # spent. Caption lines above are never subject to this -
                 # they cost nothing to begin with.
                 skipped_lines.append(line)
+                i += 1
                 continue
 
             # Owner's standing instruction, 2026-10-21 ("احذف الستة صور و
@@ -339,12 +469,12 @@ class DialoguePipeline:
             # every spoken line of theirs fails here instead of ever
             # being produced with a stand-in face. Zero cost: this is
             # checked before TTS or any fal.ai call is made.
-            photo_path = resolved_photos.get(character.name)
             if photo_path is None:
                 reason = next((r for n, r in portrait_failures if n == character.name), "لم تُولَّد صورة حقيقية لهذه الشخصية")
                 failed_lines.append(
                     (line, f"لا توجد صورة حقيقية لهذه الشخصية ({reason}) - لا توجد صورة احتياطية بأمر المالك")
                 )
+                i += 1
                 continue
 
             # Real finding, 2026-10-19: a real 22-line run paid for and
@@ -439,7 +569,9 @@ class DialoguePipeline:
                 if billed:
                     message = f"[تم صرف مال حقيقي عند fal.ai قبل هذا الفشل - راجع لوحة fal.ai] {message}"
                 failed_lines.append((line, message))
+                i += 1
                 continue
+            i += 1
 
         # Real incident, 2026-10-20: a real run paid for and finished
         # 40.91s of real clips ($8.18, confirmed from fal.ai's own Usage
@@ -577,6 +709,66 @@ class DialoguePipeline:
         result = subprocess.run(cmd, capture_output=True, text=True)
         if result.returncode != 0:
             raise RuntimeError(f"ffmpeg caption render failed: {result.stderr[-2000:]}")
+
+    def _build_two_speaker_reference(
+        self, photo_path_1: str, photo_path_2: str, slug: str, char_slug_1: str, char_slug_2: str
+    ) -> tuple[str, str, str]:
+        """Returns (composite_reference_image_path, speaker_1_mask_path,
+        speaker_2_mask_path) for a real two-speaker MultiTalk call -
+        built once per (this screenplay, these two characters, in this
+        order) and cached, the same caching posture every other real
+        asset in this file already uses.
+
+        Real, deliberate design choice, 2026-10-23: rather than a face-
+        detection dependency this project does not have (and the real
+        risk of a wrong detection silently mis-assigning which speaker's
+        audio drives which face), each character's ALREADY-GENERATED,
+        already-cached real portrait (see `_resolve_character_photo`) is
+        placed at a fixed, KNOWN position - left half for the first
+        speaker, right half for the second, the exact `hstack` technique
+        `_build_caption_group_image` already uses - so the real mask for
+        each speaker is simple, exact arithmetic on the composite's own
+        real measured dimensions, never a guess and never a detection
+        that could be wrong. Honest real limitation, not hidden: this is
+        two separate real solo photos placed side by side, not one
+        photo of both characters together in a single real shot - a
+        visibly different, less cinematic composite than the hand-picked
+        real movie frame the first live MultiTalk proof used. Upgrading
+        this to one real composed shot (a single image-generation call
+        describing both characters together) is a tracked follow-up, not
+        bundled into this first real wiring."""
+        out_dir = os.path.join(self._output_dir, "multitalk_refs")
+        os.makedirs(out_dir, exist_ok=True)
+        composite_path = os.path.join(out_dir, f"{slug}_{char_slug_1}_{char_slug_2}.jpg")
+        mask_1_path = os.path.join(out_dir, f"{slug}_{char_slug_1}_{char_slug_2}_mask1.png")
+        mask_2_path = os.path.join(out_dir, f"{slug}_{char_slug_1}_{char_slug_2}_mask2.png")
+
+        if not os.path.isfile(composite_path):
+            cmd = [
+                "ffmpeg", "-y", "-i", photo_path_1, "-i", photo_path_2,
+                "-filter_complex", "hstack=inputs=2", composite_path,
+            ]
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise RuntimeError(f"ffmpeg two-speaker reference composite failed: {result.stderr[-2000:]}")
+
+        if not os.path.isfile(mask_1_path) or not os.path.isfile(mask_2_path):
+            width, height = _ffprobe_dimensions(composite_path)
+            tile_width = width // 2
+            for mask_path, x_start, x_width in (
+                (mask_1_path, 0, tile_width),
+                (mask_2_path, tile_width, width - tile_width),
+            ):
+                cmd = [
+                    "ffmpeg", "-y", "-f", "lavfi", "-i", f"color=c=black:s={width}x{height}",
+                    "-vf", f"drawbox=x={x_start}:y=0:w={x_width}:h={height}:color=white:t=fill",
+                    "-frames:v", "1", mask_path,
+                ]
+                result = subprocess.run(cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    raise RuntimeError(f"ffmpeg two-speaker mask build failed: {result.stderr[-2000:]}")
+
+        return composite_path, mask_1_path, mask_2_path
 
     def _stitch(self, clips: list[ProducedDialogueClip], slug: str) -> str:
         list_path = os.path.join(self._output_dir, f"{slug}_dialogue_concat_list.txt")

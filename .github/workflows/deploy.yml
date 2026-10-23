@@ -133,3 +133,21 @@ jobs:
             else
               echo "MAX_EPISODE_COST_USD: not set in .env - config.py's own default (10.0) is in effect"
             fi
+            # Owner's own standing rule (Settings.multitalk_enabled's own
+            # docstring, config.py): a real, newly-built, real-money-
+            # capable path (two-speaker MultiTalk pairing) must never go
+            # live just because it is deployed - only an explicit
+            # MULTITALK_ENABLED=true the owner themselves writes into the
+            # real .env on this droplet turns it on. Deliberately NOT
+            # synced from a GitHub secret the way the real keys above
+            # are - a stored secret left on from an earlier test would
+            # otherwise silently re-enable real spend on every future
+            # deploy with no new action by the owner at all. Printed in
+            # full here (not a credential) so both the owner and any
+            # future session can see its real current state without SSH.
+            echo "=== real MultiTalk two-speaker switch (MULTITALK_ENABLED) ==="
+            if grep -q "^MULTITALK_ENABLED=..*" .env 2>/dev/null; then
+              grep "^MULTITALK_ENABLED=" .env
+            else
+              echo "MULTITALK_ENABLED: not set in .env - defaults to OFF (config.py)"
+            fi

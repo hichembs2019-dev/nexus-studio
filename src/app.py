@@ -29,6 +29,7 @@ from .integrations.replicate_video_client import (
     RealReplicateVideoClient,
     ReplicateVideoClient,
 )
+from .integrations.multitalk_video_client import MultiTalkVideoClient
 from .integrations.runpod_client import RealRunpodClient
 from .integrations.self_hosted_video_client import SelfHostedS2VVideoClient, self_hosted_price_per_second_usd
 from .integrations.tts_client import MockTTSClient, RealAzureTTSClient, TTSClient
@@ -139,6 +140,20 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
         price_per_second_usd = self_hosted_price_per_second_usd(settings.runpod_s2v_hourly_rate_usd)
         logger.info("Real video provider: self-hosted Wan 2.2 S2V (Runpod pod %s)", settings.runpod_s2v_pod_id)
         logger.info("Real image provider: Replicate (black-forest-labs/flux-dev)")
+        # Real, explicit owner switch, 2026-10-23 (see Settings.multitalk_enabled's
+        # own docstring): None unless the owner has explicitly turned this
+        # on - every spoken line keeps producing its own isolated clip
+        # until they do, even though the code itself is already built and
+        # tested (docs/SOURCES.md, "MultiTalk two-speaker generation
+        # proven real, end to end"). Reuses the SAME pod/credentials as
+        # self-hosted S2V - both real proofs ran on the same GPU pod.
+        multitalk_client = (
+            MultiTalkVideoClient(RealRunpodClient(settings.runpod_api_key), settings.runpod_s2v_pod_id)
+            if settings.multitalk_configured
+            else None
+        )
+        if multitalk_client is not None:
+            logger.info("Real two-speaker MultiTalk pairing: ENABLED (Runpod pod %s)", settings.runpod_s2v_pod_id)
         dialogue_writer = DialogueWriterAgent(reasoning)
         dialogue_pipeline = DialoguePipeline(
             video_client, tts, settings.output_dir,
@@ -147,6 +162,7 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
             image_client=image_client,
             price_per_second_usd=price_per_second_usd,
             price_per_image_usd=price_per_image_usd,
+            multitalk_client=multitalk_client,
         )
     elif not force_mocks and settings.replicate_configured and settings.azure_speech_configured:
         video_client = RealReplicateVideoClient(settings.replicate_api_token)

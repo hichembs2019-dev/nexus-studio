@@ -164,6 +164,15 @@ class ProducedDialogueClip:
     line: DialogueLine
     local_path: str
     cost_usd: float
+    # Real, additive field (2026-10-23): a MultiTalk two-speaker clip
+    # covers TWO real lines (a consecutive exchange between two
+    # different characters) in one real video file - `line` alone (the
+    # first of the two) cannot represent that. Empty for every clip that
+    # covers exactly one line (the pre-existing shape, unchanged) - only
+    # a real multi-speaker clip populates this with both of its real
+    # DialogueLine objects, in order. See dialogue_pipeline.py's own
+    # `_produce_two_speaker_pair`.
+    covered_lines: list[DialogueLine] = field(default_factory=list)
 
 
 @dataclass

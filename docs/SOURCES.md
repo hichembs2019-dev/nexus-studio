@@ -1855,3 +1855,98 @@ increment is the screenplay data only. Wiring a real MultiTalk video
 client (Stage 2a proved the technique; this is the next real step,
 its own real cost to name before spending) and a real music step remain
 separate, explicitly not bundled into this one.
+
+## Stage 2c: MultiTalk wired in as a real video client (2026-10-23)
+
+Owner's instruction, right after Stage 2a's real video landed: "اربط
+MultiTalk كـ video client حقيقي بدل التوليد الفردي" (wire MultiTalk as a
+real video client instead of the individual generation). Built and fully
+tested - zero real money spent on this increment itself, since every real
+call is through `MockComfyUIS2VClient`/`MockMultiTalkVideoClient`, the
+same mocking pattern `SelfHostedS2VVideoClient` already uses.
+
+**New real components**, each mirroring an already-proven real file's own
+shape (`wan_s2v_prompt_builder.py`/`self_hosted_video_client.py`):
+- `multitalk_prompt_builder.py`: the exact proven 17-node graph from
+  Stage 2a's real success, parameterized for two real speakers.
+- `multitalk_video_client.py`: `MultiTalkVideoClient`, reusing
+  `ComfyUIS2VClient`/`ensure_pod_ready` (the SAME real pod-orchestration
+  plumbing `SelfHostedS2VVideoClient` already uses, not a new one).
+- `DialoguePipeline`'s real production loop now looks for real pairing
+  opportunities - see below.
+
+**Real correctness constraint found while wiring this in, not guessed**:
+MultiTalk's own "add" `multi_audio_type` is literal concatenation - Stage
+2a's own real log line proved it (`final waveform shape ... length=80640
+samples (expected sum of raw)`, exactly speaker 1's real duration plus
+speaker 2's). Feeding a whole multi-turn real scene (فوزية / جويدة /
+فوزية / ...) into ONE MultiTalk call this way would play every one of
+فوزية's real lines first, then every one of جويدة's - scrambling the real
+written order, not representing it. So real pairing is scoped to exactly
+TWO CONSECUTIVE real lines, same real scene, two different real speakers,
+both already having a real resolved photo - the one shape "add" mode
+actually reproduces correctly. A longer real exchange (A-B-A-B) still
+gets real MultiTalk treatment, just as two separate real paired clips
+(A-B, then A-B) rather than one.
+
+**The real two-speaker reference image + masks**, built locally for
+free: rather than a face-detection dependency this project does not have
+(and the real risk of a wrong detection silently crossing which
+speaker's audio drives which face), each character's ALREADY-GENERATED
+real portrait (the same one `_resolve_character_photo` already produces
+and caches) is placed at a fixed, known position via the same real
+`hstack` technique `_build_caption_group_image` already uses - left half,
+right half - so each real mask is exact arithmetic on the composite's own
+real measured dimensions (`ffprobe`, never assumed), not a guess. Visually
+verified directly: built a real two-tile composite and its two real
+masks locally, viewed all three images - each white mask region lines up
+exactly with its own tile. Honest, stated limitation: this is two
+separate real solo photos side by side, not one real photo of both
+characters together in a single shot - visibly less cinematic than Stage
+2a's hand-picked real movie frame. A real single composed shot (one
+image-generation call describing both characters together) is a tracked
+follow-up, not bundled into this wiring.
+
+**Real cost/safety design**: a paired clip's real cost is
+`real_measured_duration * price_per_second_usd` (the same shared
+self-hosted knob `SelfHostedS2VVideoClient` already uses - same pod),
+covering both real lines together in one `ProducedDialogueClip`
+(`covered_lines`, new additive field on `ProducedDialogueClip`, empty for
+every existing single-line clip). The real cost ceiling is checked before
+a pair is attempted, skipping both real lines together, never half a
+pair. A real MultiTalk failure fails both real lines with the same
+"money already spent" billing note the single-speaker path already uses
+when the failure happens after a real, billed call.
+
+**Real, explicit owner switch, not auto-enabled by deploying this**:
+`Settings.multitalk_enabled` (env `MULTITALK_ENABLED`) defaults to false.
+`DialoguePipeline.multitalk_client` stays `None` - every line keeps
+producing its own isolated clip, completely unchanged - until the owner
+sets `MULTITALK_ENABLED=true` on the real droplet's own `.env` themselves.
+Deliberately NOT synced through the GitHub-secrets deploy mechanism the
+real API keys use (deploy.yml only prints its current real value, never
+sets it) - a stored secret left on from an earlier test would otherwise
+silently re-enable real spend on every future deploy with no new real
+action by the owner.
+
+20 new/updated tests across `test_multitalk_prompt_builder.py` (9),
+`test_multitalk_video_client.py` (6), `test_dialogue_pipeline.py` (11 new
+pairing tests), `test_models.py` (2), `test_app.py` (3). Mutation-tested:
+removed the same-scene guard, the different-speaker guard, and the pair
+cost-ceiling check one at a time - each confirmed to make the matching
+real test fail for the real reason, each restored. One real mutation
+check itself was caught wrong during this work and fixed: the first
+ceiling test used `max_cost_usd=0.0`, which is caught by the earlier
+PORTRAIT-generation ceiling check before ever reaching the pair-specific
+one being tested - passed even with that check deleted. Fixed to
+`2 * PRICE_PER_IMAGE_USD_UNVERIFIED` (covers both real portraits, nothing
+left for the video), confirmed to actually fail once the real check was
+removed. Full suite: 290/290.
+
+**Deliberately not yet done**: no real production run has exercised this
+end to end yet - the first real two-character screenplay the owner
+approves AFTER setting `MULTITALK_ENABLED=true` will be. A real music
+step (Stable Audio Open, Stage 1) and extending pairing beyond two
+speakers (MultiTalk's own documented ceiling is four, but only two has
+ever actually run on this project's infrastructure) remain separate,
+unstarted real steps.

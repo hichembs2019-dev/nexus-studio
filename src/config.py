@@ -54,6 +54,23 @@ class Settings:
     # if the pod is ever recreated (see self_hosted_video_client.py's own
     # docstring for how this feeds the shared price_per_second_usd knob).
     runpod_s2v_hourly_rate_usd: float
+    # Owner's own explicit standing rule, repeated throughout this
+    # project's whole history ("لا تصرف اي مال حقيقي... دون ذكر السعر
+    # الدقيق اولا والانتظار لـ"نعم" الصريح" - never spend real money
+    # without stating the exact price first and waiting for an explicit
+    # yes): MultiTalkVideoClient/the real two-speaker pairing logic in
+    # DialoguePipeline are built and tested (docs/SOURCES.md, "MultiTalk
+    # two-speaker generation proven real, end to end"), but wiring them
+    # in here would change what the NEXT real screenplay the owner
+    # approves actually spends money on, automatically, the moment this
+    # deploys - without the owner having explicitly turned that specific
+    # real behavior change on themselves. False (the default) keeps
+    # DialoguePipeline's multitalk_client at None - every line still
+    # produces its own isolated single-speaker clip, unchanged. Reuses
+    # the SAME pod/credentials as self-hosted S2V (same GPU pod ran both
+    # proofs) - no separate Runpod config needed, only this one explicit
+    # real switch.
+    multitalk_enabled: bool
     output_dir: str
     # Owner's instruction, 2026-10-20 ("قلت لك ضع له كود يشتغل و يسحب
     # المال الا عند صنع فيديو" - I told you to put code in that only
@@ -95,6 +112,10 @@ class Settings:
     def self_hosted_s2v_configured(self) -> bool:
         return bool(self.runpod_api_key and self.runpod_s2v_pod_id)
 
+    @property
+    def multitalk_configured(self) -> bool:
+        return self.multitalk_enabled and self.self_hosted_s2v_configured
+
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(
@@ -117,6 +138,7 @@ class Settings:
             runpod_api_key=os.environ.get("RUNPOD_API_KEY", ""),
             runpod_s2v_pod_id=os.environ.get("RUNPOD_S2V_POD_ID", ""),
             runpod_s2v_hourly_rate_usd=float(os.environ.get("RUNPOD_S2V_HOURLY_RATE_USD", "0.59")),
+            multitalk_enabled=os.environ.get("MULTITALK_ENABLED", "").strip().lower() in ("1", "true", "yes"),
             output_dir=os.environ.get("OUTPUT_DIR", "./output"),
             max_episode_cost_usd=float(os.environ.get("MAX_EPISODE_COST_USD", "10.0")),
         )

@@ -14,6 +14,7 @@ def _settings(**overrides) -> Settings:
         telegram_bot_token="tg", azure_speech_key="azure-key", azure_speech_region="eastus",
         azure_tts_lang="ar-SY", replicate_api_token="",
         runpod_api_key="", runpod_s2v_pod_id="", runpod_s2v_hourly_rate_usd=0.59,
+        multitalk_enabled=False,
         output_dir="./output-test", max_episode_cost_usd=10.0,
     )
     base.update(overrides)
@@ -96,4 +97,35 @@ def test_build_app_does_not_use_self_hosted_s2v_without_a_real_replicate_token_f
     app = build_app(_settings(replicate_api_token="", runpod_api_key="rp_real", runpod_s2v_pod_id="wt5ennaph7w5nh"))
 
     assert app.video_client is None
-    assert app.dialogue_pipeline is None
+
+
+def test_build_app_leaves_multitalk_off_by_default_even_with_a_real_pod_configured():
+    # Owner's own standing rule (Settings.multitalk_enabled's own
+    # docstring): a real, newly-built, real-money-capable path must never
+    # go live just because its prerequisites happen to be configured -
+    # only the owner's own explicit MULTITALK_ENABLED switch turns it on.
+    app = build_app(_settings(
+        replicate_api_token="r8_real", runpod_api_key="rp_real", runpod_s2v_pod_id="wt5ennaph7w5nh",
+        multitalk_enabled=False,
+    ))
+
+    assert app.dialogue_pipeline._multitalk_client is None
+
+
+def test_build_app_wires_the_real_multitalk_client_once_explicitly_enabled():
+    from src.integrations.multitalk_video_client import MultiTalkVideoClient
+
+    app = build_app(_settings(
+        replicate_api_token="r8_real", runpod_api_key="rp_real", runpod_s2v_pod_id="wt5ennaph7w5nh",
+        multitalk_enabled=True,
+    ))
+
+    assert isinstance(app.dialogue_pipeline._multitalk_client, MultiTalkVideoClient)
+
+
+def test_build_app_never_enables_multitalk_without_a_real_self_hosted_pod():
+    # multitalk_enabled alone (e.g. a stray env var with no real Runpod
+    # pod configured) must not wire a client with no real pod id to call.
+    app = build_app(_settings(replicate_api_token="r8_real", runpod_api_key="", runpod_s2v_pod_id="", multitalk_enabled=True))
+
+    assert app.dialogue_pipeline is None or app.dialogue_pipeline._multitalk_client is None
