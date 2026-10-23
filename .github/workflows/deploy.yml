@@ -55,11 +55,25 @@ jobs:
           # clip, proven end to end".
           RUNPOD_API_KEY: ${{ secrets.RUNPOD_API_KEY }}
           RUNPOD_S2V_POD_ID: ${{ secrets.RUNPOD_S2V_POD_ID }}
+          # Owner's explicit instruction, 2026-10-23 ("فعل" - activate it),
+          # given directly after personally viewing the real two-speaker
+          # proof this exact deploy pipeline produced: the earlier
+          # "never auto-sync this, only a manual .env edit" design assumed
+          # the owner would edit .env on the droplet themselves, which this
+          # project has no real path for (no SSH access from a coding
+          # session, and the owner has never done manual droplet work
+          # since this very deploy.yml was built specifically to end that
+          # - see this file's own opening comment). Synced the SAME real
+          # way REPLICATE_API_TOKEN/RUNPOD_API_KEY/RUNPOD_S2V_POD_ID
+          # already are: a GitHub repository secret the owner sets once
+          # through GitHub's own UI, the same action they already took for
+          # those three real keys.
+          MULTITALK_ENABLED: ${{ secrets.MULTITALK_ENABLED }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: REPLICATE_API_TOKEN,RUNPOD_API_KEY,RUNPOD_S2V_POD_ID
+          envs: REPLICATE_API_TOKEN,RUNPOD_API_KEY,RUNPOD_S2V_POD_ID,MULTITALK_ENABLED
           script: |
             set -e
             cd ~/nexus-studio
@@ -99,6 +113,13 @@ jobs:
                 echo "RUNPOD_S2V_POD_ID=${RUNPOD_S2V_POD_ID}" >> .env
               fi
             fi
+            if [ -n "${MULTITALK_ENABLED:-}" ]; then
+              if grep -q "^MULTITALK_ENABLED=" .env 2>/dev/null; then
+                sed -i "s|^MULTITALK_ENABLED=.*|MULTITALK_ENABLED=${MULTITALK_ENABLED}|" .env
+              else
+                echo "MULTITALK_ENABLED=${MULTITALK_ENABLED}" >> .env
+              fi
+            fi
             git pull origin main
             docker compose up -d --build nexus-studio
             sleep 8
@@ -133,18 +154,14 @@ jobs:
             else
               echo "MAX_EPISODE_COST_USD: not set in .env - config.py's own default (10.0) is in effect"
             fi
-            # Owner's own standing rule (Settings.multitalk_enabled's own
-            # docstring, config.py): a real, newly-built, real-money-
-            # capable path (two-speaker MultiTalk pairing) must never go
-            # live just because it is deployed - only an explicit
-            # MULTITALK_ENABLED=true the owner themselves writes into the
-            # real .env on this droplet turns it on. Deliberately NOT
-            # synced from a GitHub secret the way the real keys above
-            # are - a stored secret left on from an earlier test would
-            # otherwise silently re-enable real spend on every future
-            # deploy with no new action by the owner at all. Printed in
-            # full here (not a credential) so both the owner and any
-            # future session can see its real current state without SSH.
+            # Owner's explicit instruction, 2026-10-23 ("فعل"), given
+            # after personally viewing the real two-speaker proof - see
+            # the real secret-sync block above for why this moved from
+            # "owner edits .env by hand" (a path this project has never
+            # actually had) to the same GitHub-secret mechanism the real
+            # API keys already use. Printed in full here either way (not
+            # a credential) so both the owner and any future session can
+            # see its real current state on every deploy.
             echo "=== real MultiTalk two-speaker switch (MULTITALK_ENABLED) ==="
             if grep -q "^MULTITALK_ENABLED=..*" .env 2>/dev/null; then
               grep "^MULTITALK_ENABLED=" .env
