@@ -137,6 +137,26 @@ class DialogueLine:
 
 
 @dataclass
+class ShotPlan:
+    """The director's plan for how ONE DialogueLine is filmed - the fix
+    for the owner's real complaint (2026-10-23): every produced clip
+    looked like a narrator, one person facing the camera and talking.
+    Root cause in code: DialoguePipeline animated one cached portrait per
+    character, generated "looking directly at camera", for every line,
+    always as an "emotional close-up shot". A ShotPlan gives each line
+    its own framing, angle, lighting, background motion and gaze, written
+    by ShotDirectorAgent (Gemini). Additive: nothing reads it yet."""
+
+    line_index: int
+    shot_type: str
+    camera_angle: str
+    camera_movement: str
+    lighting: str
+    environment_motion: str
+    gaze: str
+
+
+@dataclass
 class DialogueScreenplay:
     """The dialogue-native counterpart to Screenplay (models.py) - real
     characters speaking real lines, the actual ask ("مسلسلات وأفلام ... و
