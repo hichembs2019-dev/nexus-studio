@@ -31,11 +31,27 @@ import mimetypes
 import os
 import subprocess
 
+from src.agents.shot_director import ShotDirectorAgent
 from src.integrations.multitalk_video_client import MultiTalkVideoClient
-from src.integrations.replicate_image_client import PRICE_PER_IMAGE_USD_UNVERIFIED, ReplicateImageClient
+from src.integrations.replicate_image_client import (
+    FLUX2_DEV_PRICE_PER_MEGAPIXEL_USD_UNVERIFIED,
+    PRICE_PER_IMAGE_USD_UNVERIFIED,
+    ReplicateImageClient,
+    ShotImageClient,
+    flux2_dev_cost_usd,
+)
 from src.integrations.replicate_video_client import PROVISIONAL_PRICE_PER_SECOND_USD, ReplicateVideoClient
 from src.integrations.tts_client import TTSClient
-from src.models import Character, DialogueLine, DialogueScreenplay, ProducedDialogueClip, ProducedDialogueEpisode
+from src.models import (
+    Character,
+    CompiledShotPrompt,
+    DialogueLine,
+    DialogueScreenplay,
+    ProducedDialogueClip,
+    ProducedDialogueEpisode,
+    ShotPlan,
+)
+from src.workflows.shot_prompt_compiler import ShotPromptCompiler
 
 CINEMATIC_STYLE_SUFFIX = ", cinematic lighting, warm color grading, emotional close-up shot, high production value television drama"
 
@@ -63,7 +79,7 @@ CINEMATIC_STYLE_SUFFIX = ", cinematic lighting, warm color grading, emotional cl
 # unproven model - see docs/SOURCES.md), but a real environment instead
 # of an empty backdrop, which is the one concrete, low-risk improvement
 # available without a new model or new real-money risk.
-PORTRAIT_STYLE_SUFFIX = ", natural expression, looking directly at camera, photorealistic, shot on a DSLR, sharp focus, cinematic lighting - set within a real, lived-in location that fits the story (a home, a workplace, outdoors, wherever the story actually places them), never a plain studio backdrop or neutral background"
+PORTRAIT_STYLE_SUFFIX = ", natural expression, face clearly visible, eyes looking slightly off-camera as if mid-conversation, photorealistic, shot on a DSLR, sharp focus, cinematic lighting - set within a real, lived-in location that fits the story (a home, a workplace, outdoors, wherever the story actually places them), never a plain studio backdrop or neutral background"
 
 # Owner's instruction, 2026-10-20 ("نحذف الام و يبقى حوارها مكتوب على
 # الشاشة... و كذلك نحذف الاب... لكي نستحقظ على المال" - remove the
@@ -218,7 +234,20 @@ class DialoguePipeline:
         # to overlap): same reasoning as price_per_second_usd above, for
         # the portrait cost component.
         price_per_image_usd: float = PRICE_PER_IMAGE_USD_UNVERIFIED,
+        # Cinematic shot mode (owner's instruction, 2026-10-23 - the fix for
+        # "a still person talking like a narrator"): only when ALL three are
+        # given (src/app.py's explicit CINEMATIC_SHOTS_ENABLED switch) does
+        # produce() direct, compile and generate one shot still per spoken
+        # line; otherwise every line is produced exactly as before.
+        shot_director: ShotDirectorAgent | None = None,
+        shot_compiler: ShotPromptCompiler | None = None,
+        shot_image_client: ShotImageClient | None = None,
+        price_per_megapixel_usd: float = FLUX2_DEV_PRICE_PER_MEGAPIXEL_USD_UNVERIFIED,
     ):
+        self._shot_director = shot_director
+        self._shot_compiler = shot_compiler
+        self._shot_image_client = shot_image_client
+        self._price_per_megapixel_usd = price_per_megapixel_usd
         self._fal_video = fal_video
         self._tts = tts
         self._output_dir = output_dir
@@ -240,6 +269,14 @@ class DialoguePipeline:
         # never silently run the real bill past what was agreed to.
         self._max_cost_usd = max_cost_usd
         self._multitalk_client = multitalk_client
+
+    @property
+    def cinematic_shots_enabled(self) -> bool:
+        return (
+            self._shot_director is not None
+            and self._shot_compiler is not None
+            and self._shot_image_client is not None
+        )
 
     def save_character_photo(self, title: str, character_name: str, image_bytes: bytes) -> str:
         """Owner's instruction, 2026-10-21 ("الصور ضعها انت الان و هكذا
@@ -274,7 +311,22 @@ class DialoguePipeline:
         skipped_lines: list = []
         portrait_failures: list[tuple[str, str]] = []
         portrait_cost_usd = 0.0
+        shot_image_cost_usd = 0.0
         spent_so_far = 0.0
+
+        # Cinematic shot mode: direct (Gemini) and compile (Groq) the whole
+        # screenplay FIRST - both are free text calls, so a failure here
+        # stops the run before a single paid portrait, still or video.
+        shots: dict[int, tuple[ShotPlan, CompiledShotPrompt]] = {}
+        if self.cinematic_shots_enabled:
+            try:
+                plans = self._shot_director.plan_shots(screenplay)
+                compiled = self._shot_compiler.compile(screenplay, plans)
+            except Exception as exc:
+                raise DialoguePipelineError(
+                    f"تعذّر تخطيط اللقطات السينمائية قبل بدء التوليد - لم يُصرف أي مال حقيقي. السبب: {exc}"
+                ) from exc
+            shots = {p.line_index: (p, c) for p, c in zip(plans, compiled)}
 
         # Pre-pass: one real, story-specific reference photo per speaking
         # character, generated once here and reused for every line that
@@ -380,6 +432,10 @@ class DialoguePipeline:
             next_line = screenplay.lines[i + 1] if i + 1 < n else None
             pairs_with_next = (
                 self._multitalk_client is not None
+                # A MultiTalk pair is animated from two portraits pasted
+                # side by side - the opposite of a directed shot - so the
+                # cinematic mode always films each line as its own shot.
+                and not shots
                 and next_line is not None
                 and next_line.spoken
                 and next_line.scene == line.scene
@@ -495,6 +551,7 @@ class DialoguePipeline:
             # ffprobe step failed. billed tracks exactly that so the real
             # message can say which case actually happened.
             billed = False
+            shot_billed = False
             try:
                 prefix = f"{slug}_line{line.index:03d}"
                 audio_bytes = self._tts.synthesize(line.line, character.voice, lang=self._tts_lang)
@@ -502,11 +559,24 @@ class DialoguePipeline:
                 with open(audio_path, "wb") as f:
                     f.write(audio_bytes)
 
-                image_data_uri = _data_uri(photo_path)
+                shot = shots.get(line.index)
+                if shot is not None:
+                    plan, compiled_prompt = shot
+                    shot_path, shot_cost = self._generate_shot_still(
+                        screenplay, line, plan, compiled_prompt, resolved_photos, prefix
+                    )
+                    shot_billed = True
+                    shot_image_cost_usd += shot_cost
+                    spent_so_far += shot_cost
+                    image_data_uri = _data_uri(shot_path)
+                    video_prompt = compiled_prompt.video_prompt
+                else:
+                    image_data_uri = _data_uri(photo_path)
+                    video_prompt = (line.action or f"{character.name} speaking") + CINEMATIC_STYLE_SUFFIX
                 audio_data_uri = _bytes_data_uri(audio_bytes, "audio/mpeg")
 
                 clip_bytes = self._fal_video.generate_speech_to_video(
-                    prompt=(line.action or f"{character.name} speaking") + CINEMATIC_STYLE_SUFFIX,
+                    prompt=video_prompt,
                     image_data_uri=image_data_uri,
                     audio_data_uri=audio_data_uri,
                     resolution=self._resolution,
@@ -568,6 +638,8 @@ class DialoguePipeline:
                 message = str(exc)
                 if billed:
                     message = f"[تم صرف مال حقيقي عند fal.ai قبل هذا الفشل - راجع لوحة fal.ai] {message}"
+                elif shot_billed:
+                    message = f"[تم صرف مال حقيقي على صورة اللقطة (flux-2-dev) قبل هذا الفشل] {message}"
                 failed_lines.append((line, message))
                 i += 1
                 continue
@@ -601,7 +673,52 @@ class DialoguePipeline:
             skipped_lines=skipped_lines,
             portrait_cost_usd=portrait_cost_usd,
             portrait_failures=portrait_failures,
+            shot_image_cost_usd=shot_image_cost_usd,
         )
+
+    def _generate_shot_still(
+        self,
+        screenplay: DialogueScreenplay,
+        line: DialogueLine,
+        plan: ShotPlan,
+        compiled_prompt: CompiledShotPrompt,
+        resolved_photos: dict[str, str],
+        prefix: str,
+    ) -> tuple[str, float]:
+        """One flux-2-dev still for this line, generated FROM the speaker's
+        own portrait (so the face stays the same person), plus one other
+        character of the same scene when the director framed a two-shot or
+        over-the-shoulder. Returns (path, real_cost_usd), with the cost
+        computed from the measured pixel size of every input and of the
+        output - never from an assumed resolution."""
+        ref_paths = [resolved_photos[line.character]]
+        if plan.shot_type in ("two_shot", "over_the_shoulder"):
+            partner = next(
+                (
+                    l.character for l in screenplay.lines
+                    if l.scene == line.scene and l.character != line.character and l.character in resolved_photos
+                ),
+                None,
+            )
+            if partner is not None:
+                ref_paths.append(resolved_photos[partner])
+        references = []
+        for path in ref_paths:
+            with open(path, "rb") as f:
+                references.append((f.read(), mimetypes.guess_type(path)[0] or "image/jpeg"))
+
+        image_bytes = self._shot_image_client.generate_shot_image(compiled_prompt.image_prompt, references)
+        shots_dir = os.path.join(self._output_dir, "shots")
+        os.makedirs(shots_dir, exist_ok=True)
+        shot_path = os.path.join(shots_dir, f"{prefix}.jpg")
+        with open(shot_path, "wb") as f:
+            f.write(image_bytes)
+
+        pixel_counts = []
+        for path in ref_paths + [shot_path]:
+            width, height = _ffprobe_dimensions(path)
+            pixel_counts.append(width * height)
+        return shot_path, flux2_dev_cost_usd(pixel_counts, self._price_per_megapixel_usd)
 
     def _resolve_character_photo(
         self, character: Character, slug: str, premise: str

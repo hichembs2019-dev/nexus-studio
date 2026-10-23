@@ -83,6 +83,14 @@ class Settings:
     # to lose in one sitting, independent of the cost estimate already
     # shown before Approve.
     max_episode_cost_usd: float
+    # Cinematic shot mode (2026-10-23): Gemini directs one shot per line,
+    # Groq compiles its prompts, flux-2-dev renders a still from the
+    # character's portrait, and that still - not the portrait - is
+    # animated. Adds one real paid image per spoken line, so it is an
+    # explicit owner switch (env CINEMATIC_SHOTS_ENABLED), off by default,
+    # same posture as multitalk_enabled: deploying this changes nothing
+    # about what the next approved screenplay spends until it is turned on.
+    cinematic_shots_enabled: bool = False
 
     @property
     def groq_configured(self) -> bool:
@@ -113,6 +121,12 @@ class Settings:
         return bool(self.runpod_api_key and self.runpod_s2v_pod_id)
 
     @property
+    def cinematic_shots_configured(self) -> bool:
+        return self.cinematic_shots_enabled and self.replicate_configured and (
+            self.gemini_configured or self.groq_configured
+        )
+
+    @property
     def multitalk_configured(self) -> bool:
         return self.multitalk_enabled and self.self_hosted_s2v_configured
 
@@ -141,4 +155,5 @@ class Settings:
             multitalk_enabled=os.environ.get("MULTITALK_ENABLED", "").strip().lower() in ("1", "true", "yes"),
             output_dir=os.environ.get("OUTPUT_DIR", "./output"),
             max_episode_cost_usd=float(os.environ.get("MAX_EPISODE_COST_USD", "10.0")),
+            cinematic_shots_enabled=os.environ.get("CINEMATIC_SHOTS_ENABLED", "").strip().lower() in ("1", "true", "yes"),
         )

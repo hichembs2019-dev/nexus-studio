@@ -137,6 +137,37 @@ class DialogueLine:
 
 
 @dataclass
+class ShotPlan:
+    """The director's plan for how ONE DialogueLine is filmed - the fix
+    for the owner's real complaint (2026-10-23): every produced clip
+    looked like a narrator, one person facing the camera and talking.
+    Root cause in code: DialoguePipeline animated one cached portrait per
+    character, generated "looking directly at camera", for every line,
+    always as an "emotional close-up shot". A ShotPlan gives each line
+    its own framing, angle, lighting, background motion and gaze, written
+    by ShotDirectorAgent (Gemini). Additive: nothing reads it yet."""
+
+    line_index: int
+    shot_type: str
+    camera_angle: str
+    camera_movement: str
+    lighting: str
+    environment_motion: str
+    gaze: str
+
+
+@dataclass
+class CompiledShotPrompt:
+    """The final generation prompts for one ShotPlan, written by
+    ShotPromptCompiler (Groq): one for the shot's reference still image,
+    one for the speech-to-video model. Additive: nothing reads it yet."""
+
+    line_index: int
+    image_prompt: str
+    video_prompt: str
+
+
+@dataclass
 class DialogueScreenplay:
     """The dialogue-native counterpart to Screenplay (models.py) - real
     characters speaking real lines, the actual ask ("مسلسلات وأفلام ... و
@@ -218,10 +249,13 @@ class ProducedDialogueEpisode:
     # the episode over it.
     portrait_cost_usd: float = 0.0
     portrait_failures: list[tuple[str, str]] = field(default_factory=list)
+    # Cinematic shot mode: the real cost of every flux-2-dev shot still
+    # generated in this run, including stills whose video then failed.
+    shot_image_cost_usd: float = 0.0
 
     @property
     def total_cost_usd(self) -> float:
-        return sum(c.cost_usd for c in self.clips) + self.portrait_cost_usd
+        return sum(c.cost_usd for c in self.clips) + self.portrait_cost_usd + self.shot_image_cost_usd
 
 
 @dataclass

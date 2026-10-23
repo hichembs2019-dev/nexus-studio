@@ -148,7 +148,11 @@ class BotConversation:
         # اصبحت تتداخل في بعضها"): same reasoning as price_per_second_usd
         # above, for the portrait cost component of the estimate.
         price_per_image_usd: float = PRICE_PER_IMAGE_USD_UNVERIFIED,
+        # Cinematic shot mode: the estimated cost of one flux-2-dev shot
+        # still, added once per spoken line. 0.0 when the mode is off.
+        estimated_shot_image_usd: float = 0.0,
     ):
+        self._estimated_shot_image_usd = estimated_shot_image_usd
         self._dialogue_writer = dialogue_writer
         self._publisher = publisher
         self._price_per_second_usd = price_per_second_usd
@@ -693,6 +697,7 @@ class BotConversation:
         est_cost = (
             spoken_count * ESTIMATED_SECONDS_PER_LINE * self._price_per_second_usd
             + appearing_character_count * self._price_per_image_usd
+            + spoken_count * self._estimated_shot_image_usd
         )
         lines.append(f"(تكلفة تقديرية تقريبية: ${est_cost:.2f} - التكلفة الحقيقية تُحسب بعد التوليد الفعلي)")
         lines.append("لتعديل سطر أو عدة أسطر دفعة واحدة، كل تعديل في سطر منفصل:\n/edit\n<الرقم> <الحوار الجديد>\n<رقم آخر> <حوار آخر>")

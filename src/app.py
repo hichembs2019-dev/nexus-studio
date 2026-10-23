@@ -17,11 +17,15 @@ from .integrations.reasoning_client import (
     RealGeminiReasoningClient,
     RealGroqReasoningClient,
 )
+from .agents.shot_director import ShotDirectorAgent
 from .integrations.replicate_image_client import (
+    FLUX2_DEV_PRICE_PER_MEGAPIXEL_USD_UNVERIFIED,
     PRICE_PER_IMAGE_USD_UNVERIFIED,
     MockReplicateImageClient,
+    RealFlux2ShotImageClient,
     RealReplicateImageClient,
     ReplicateImageClient,
+    estimated_shot_image_usd,
 )
 from .integrations.replicate_video_client import (
     PROVISIONAL_PRICE_PER_SECOND_USD,
@@ -34,6 +38,13 @@ from .integrations.runpod_client import RealRunpodClient
 from .integrations.self_hosted_video_client import SelfHostedS2VVideoClient, self_hosted_price_per_second_usd
 from .integrations.tts_client import MockTTSClient, RealAzureTTSClient, TTSClient
 from .workflows.dialogue_pipeline import DialoguePipeline
+from .workflows.shot_prompt_compiler import ShotPromptCompiler
+
+# Cinematic shot mode: the speech-to-video size. 832x480 is the size
+# MultiTalk was proven at on this project's own pod (docs/SOURCES.md);
+# the self-hosted S2V graph itself has only been proven at 640x640.
+CINEMATIC_VIDEO_WIDTH = 832
+CINEMATIC_VIDEO_HEIGHT = 480
 
 logger = logging.getLogger("nexus_studio")
 
@@ -121,6 +132,32 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
     # mock/unconfigured build where no real pipeline exists at all.
     price_per_second_usd: float = PROVISIONAL_PRICE_PER_SECOND_USD
     price_per_image_usd: float = PRICE_PER_IMAGE_USD_UNVERIFIED
+
+    # Cinematic shot mode (owner's instruction, 2026-10-23): Gemini is the
+    # director (Groq as its fallback), Groq is the prompt compiler (Gemini
+    # as its fallback - `reasoning` above already is exactly that), and
+    # flux-2-dev renders each shot still from the character's portrait.
+    # Only when the owner's explicit CINEMATIC_SHOTS_ENABLED switch is on.
+    shot_kwargs: dict = {}
+    s2v_size: dict = {}
+    if not force_mocks and settings.cinematic_shots_configured:
+        groq_only = (
+            RealGroqReasoningClient(settings.groq_api_key, settings.groq_model) if settings.groq_configured else None
+        )
+        director_reasoning: AgentReasoningClient = (
+            RealGeminiReasoningClient(settings.gemini_api_key, settings.gemini_model, fallback=groq_only)
+            if settings.gemini_configured
+            else reasoning
+        )
+        shot_kwargs = dict(
+            shot_director=ShotDirectorAgent(director_reasoning),
+            shot_compiler=ShotPromptCompiler(reasoning),
+            shot_image_client=RealFlux2ShotImageClient(settings.replicate_api_token),
+            price_per_megapixel_usd=FLUX2_DEV_PRICE_PER_MEGAPIXEL_USD_UNVERIFIED,
+        )
+        s2v_size = dict(width=CINEMATIC_VIDEO_WIDTH, height=CINEMATIC_VIDEO_HEIGHT)
+        logger.info("Cinematic shot mode: ENABLED (Gemini director, Groq compiler, flux-2-dev shot stills)")
+
     # Owner's instruction, 2026-10-22 ("نعم" to continuing the wiring,
     # right after the self-hosted Wan 2.2 S2V graph was proven end to
     # end on a real pod): preferred over Replicate whenever both a real
@@ -135,7 +172,9 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
     # احسن و واقعي اكثر من drama"), so once it is configured it is the
     # real path actually used, not a lower-priority fallback.
     if not force_mocks and settings.self_hosted_s2v_configured and settings.replicate_configured and settings.azure_speech_configured:
-        video_client = SelfHostedS2VVideoClient(RealRunpodClient(settings.runpod_api_key), settings.runpod_s2v_pod_id)
+        video_client = SelfHostedS2VVideoClient(
+            RealRunpodClient(settings.runpod_api_key), settings.runpod_s2v_pod_id, **s2v_size
+        )
         image_client = RealReplicateImageClient(settings.replicate_api_token)
         price_per_second_usd = self_hosted_price_per_second_usd(settings.runpod_s2v_hourly_rate_usd)
         logger.info("Real video provider: self-hosted Wan 2.2 S2V (Runpod pod %s)", settings.runpod_s2v_pod_id)
@@ -163,6 +202,7 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
             price_per_second_usd=price_per_second_usd,
             price_per_image_usd=price_per_image_usd,
             multitalk_client=multitalk_client,
+            **shot_kwargs,
         )
     elif not force_mocks and settings.replicate_configured and settings.azure_speech_configured:
         video_client = RealReplicateVideoClient(settings.replicate_api_token)
@@ -177,6 +217,7 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
             image_client=image_client,
             price_per_second_usd=price_per_second_usd,
             price_per_image_usd=price_per_image_usd,
+            **shot_kwargs,
         )
     elif force_mocks:
         video_client = MockReplicateVideoClient()
@@ -213,6 +254,9 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
         BotConversation(
             dialogue_writer, publisher,
             price_per_second_usd=price_per_second_usd, price_per_image_usd=price_per_image_usd,
+            estimated_shot_image_usd=(
+                estimated_shot_image_usd(FLUX2_DEV_PRICE_PER_MEGAPIXEL_USD_UNVERIFIED) if shot_kwargs else 0.0
+            ),
         )
         if dialogue_writer is not None
         else None
