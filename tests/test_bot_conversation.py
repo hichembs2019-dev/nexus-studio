@@ -19,7 +19,13 @@ def _cast_reply(*people):
 
 
 def _lines_reply(*lines):
-    return json.dumps([{"character": c, "line": l, "action": a} for c, l, a in lines])
+    # Real scene data (2026-10-23) is now required by DialogueWriterAgent's
+    # own parsing - every test fixture here is one real scene (scene 0)
+    # unless a test specifically needs otherwise (see the dedicated
+    # multi-scene _format_screenplay tests below, which build their own).
+    return json.dumps(
+        [{"character": c, "line": l, "action": a, "scene": 0, "location": "a quiet room", "mood": "calm"} for c, l, a in lines]
+    )
 
 
 def _conversation(reasoning_replies: list[str], youtube_video_ids: list[str] | None = None) -> tuple[BotConversation, MockPublishingClient]:
@@ -38,6 +44,36 @@ def test_new_with_explicit_seconds_writes_a_screenplay_sized_to_them():
 
     assert "beat one" in reply.text
     assert "beat two" in reply.text
+
+
+def test_format_screenplay_shows_real_scene_breaks_before_approval():
+    # Owner's own definition of "فيلم سينمائي", 2026-10-23 ("مشاهد
+    # متعددة"): the owner reads/edits this exact message before any real
+    # money is spent (the project's one human gate) - a real scene break
+    # that only existed inside the data and never reached this text would
+    # be invisible to the one person who is supposed to review it.
+    cast = _cast_reply(("فوزية", "female"), ("جويدة", "female"))
+    lines = json.dumps(
+        [
+            {
+                "character": "فوزية", "line": "العشاء جاهز", "action": "smiling",
+                "scene": 0, "location": "مطبخ دافئ في بيت العائلة", "mood": "دافئ",
+            },
+            {
+                "character": "جويدة", "line": "أين أبي؟", "action": "worried",
+                "scene": 1, "location": "شارع مظلم خارج البيت", "mood": "متوتر",
+            },
+        ]
+    )
+    conversation, _ = _conversation([cast, lines])
+
+    reply = conversation.handle_new("chat1", f"{int(2 * ESTIMATED_SECONDS_PER_LINE)} قصة عائلية.")
+
+    assert "🎬 المشهد 1: مطبخ دافئ في بيت العائلة (دافئ)" in reply.text
+    assert "🎬 المشهد 2: شارع مظلم خارج البيت (متوتر)" in reply.text
+    # the scene 1 header must appear before "العشاء جاهز" and scene 2's
+    # header must appear before "أين أبي؟" - real order, not just presence
+    assert reply.text.index("🎬 المشهد 1") < reply.text.index("العشاء جاهز") < reply.text.index("🎬 المشهد 2") < reply.text.index("أين أبي؟")
     assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
 
 

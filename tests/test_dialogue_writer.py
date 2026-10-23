@@ -52,8 +52,8 @@ def test_write_dialogue_screenplay_builds_cast_then_lines():
     cast_reply = _cast_reply(("فوزية", "female"), ("جويدة", "female"))
     lines_reply = json.dumps(
         [
-            {"character": "فوزية", "line": "العشاء جاهز يا جويدة", "action": "smiling, setting the table"},
-            {"character": "جويدة", "line": "رائحته شهية", "action": "walking in, laughing"},
+            {"character": "فوزية", "line": "العشاء جاهز يا جويدة", "action": "smiling, setting the table", "scene": 0, "location": "a quiet room", "mood": "calm"},
+            {"character": "جويدة", "line": "رائحته شهية", "action": "walking in, laughing", "scene": 0, "location": "a quiet room", "mood": "calm"},
         ]
     )
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
@@ -70,6 +70,12 @@ def test_write_dialogue_screenplay_builds_cast_then_lines():
     assert screenplay.lines[0].line == "العشاء جاهز يا جويدة"
     assert screenplay.lines[0].action == "smiling, setting the table"
     assert screenplay.lines[0].index == 0
+    # Real scene data, 2026-10-23 - both lines share scene 0, so this is
+    # one real DialogueSceneInfo with both speakers present, not two.
+    assert screenplay.lines[0].scene == 0
+    assert len(screenplay.scenes) == 1
+    assert screenplay.scenes[0].location == "a quiet room"
+    assert screenplay.scenes[0].characters_present == ["فوزية", "جويدة"]
 
     # the lines call must be constrained to the exact cast from the first call
     assert "فوزية, جويدة" in reasoning.calls[1][0]
@@ -84,7 +90,7 @@ def test_write_dialogue_screenplay_lines_prompt_requires_verbatim_quotes_and_for
     # a check that only asserts the call happened would pass with this
     # instruction deleted.
     cast_reply = _cast_reply(("فوزية", "female"))
-    lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
+    lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving", "scene": 0, "location": "a quiet room", "mood": "calm"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
 
@@ -104,7 +110,7 @@ def test_write_dialogue_screenplay_prompts_forbid_a_narrator_role():
     # in-scene dialogue - the exact documentary-narration failure this
     # whole agent exists to prevent, reappearing through the cast step.
     cast_reply = _cast_reply(("فوزية", "female"))
-    lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
+    lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving", "scene": 0, "location": "a quiet room", "mood": "calm"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
 
@@ -125,7 +131,7 @@ def test_write_dialogue_screenplay_lines_prompt_prioritizes_essential_quoted_mom
     # line_count allowed and the prompt gave no guidance on which to
     # keep.
     cast_reply = _cast_reply(("فوزية", "female"))
-    lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
+    lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving", "scene": 0, "location": "a quiet room", "mood": "calm"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
 
@@ -169,10 +175,10 @@ def test_write_dialogue_screenplay_rejects_one_character_dominating_the_lines():
     cast_reply = _cast_reply(("الشاب", "male"), ("الأب", "male"))
     lines_reply = json.dumps(
         [
-            {"character": "الشاب", "line": "أولاً", "action": ""},
-            {"character": "الشاب", "line": "ثانياً", "action": ""},
-            {"character": "الشاب", "line": "ثالثاً", "action": ""},
-            {"character": "الأب", "line": "رابعاً", "action": ""},
+            {"character": "الشاب", "line": "أولاً", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
+            {"character": "الشاب", "line": "ثانياً", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
+            {"character": "الشاب", "line": "ثالثاً", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
+            {"character": "الأب", "line": "رابعاً", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
         ]
     )
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
@@ -189,9 +195,9 @@ def test_write_dialogue_screenplay_allows_a_real_imbalance_under_the_ceiling():
     cast_reply = _cast_reply(("الشاب", "male"), ("الأب", "male"))
     lines_reply = json.dumps(
         [
-            {"character": "الشاب", "line": "أولاً", "action": ""},
-            {"character": "الشاب", "line": "ثانياً", "action": ""},
-            {"character": "الأب", "line": "ثالثاً", "action": ""},
+            {"character": "الشاب", "line": "أولاً", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
+            {"character": "الشاب", "line": "ثانياً", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
+            {"character": "الأب", "line": "ثالثاً", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
         ]
     )
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
@@ -209,8 +215,8 @@ def test_write_dialogue_screenplay_does_not_apply_the_dominance_check_to_a_singl
     cast_reply = _cast_reply(("الشاب", "male"))
     lines_reply = json.dumps(
         [
-            {"character": "الشاب", "line": "أولاً", "action": ""},
-            {"character": "الشاب", "line": "ثانياً", "action": ""},
+            {"character": "الشاب", "line": "أولاً", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
+            {"character": "الشاب", "line": "ثانياً", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
         ]
     )
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
@@ -228,10 +234,10 @@ def test_write_complete_dialogue_screenplay_also_rejects_one_character_dominatin
     cast_reply = _cast_reply(("الشاب", "male"), ("الأب", "male"))
     lines_reply = json.dumps(
         [
-            {"character": "الشاب", "line": "أ", "action": ""},
-            {"character": "الشاب", "line": "ب", "action": ""},
-            {"character": "الشاب", "line": "ج", "action": ""},
-            {"character": "الأب", "line": "د", "action": ""},
+            {"character": "الشاب", "line": "أ", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
+            {"character": "الشاب", "line": "ب", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
+            {"character": "الشاب", "line": "ج", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
+            {"character": "الأب", "line": "د", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
         ]
     )
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
@@ -251,8 +257,8 @@ def test_write_dialogue_screenplay_assigns_different_voices_by_gender():
     cast_reply = _cast_reply(("Tom", "male"), ("Amy", "female"))
     lines_reply = json.dumps(
         [
-            {"character": "Tom", "line": "Hello", "action": "waving"},
-            {"character": "Amy", "line": "Hi", "action": "waving back"},
+            {"character": "Tom", "line": "Hello", "action": "waving", "scene": 0, "location": "a quiet room", "mood": "calm"},
+            {"character": "Amy", "line": "Hi", "action": "waving back", "scene": 0, "location": "a quiet room", "mood": "calm"},
         ]
     )
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
@@ -267,7 +273,7 @@ def test_write_dialogue_screenplay_assigns_different_voices_by_gender():
 
 def test_write_dialogue_screenplay_raises_if_a_line_speaker_is_not_in_the_cast():
     cast_reply = _cast_reply(("فوزية", "female"))
-    lines_reply = json.dumps([{"character": "شخص غريب", "line": "مرحبا", "action": "waving"}])
+    lines_reply = json.dumps([{"character": "شخص غريب", "line": "مرحبا", "action": "waving", "scene": 0, "location": "a quiet room", "mood": "calm"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
 
@@ -277,7 +283,7 @@ def test_write_dialogue_screenplay_raises_if_a_line_speaker_is_not_in_the_cast()
 
 def test_write_dialogue_screenplay_raises_if_too_few_lines_were_returned():
     cast_reply = _cast_reply(("فوزية", "female"))
-    lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
+    lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving", "scene": 0, "location": "a quiet room", "mood": "calm"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
 
@@ -320,7 +326,7 @@ def test_write_dialogue_screenplay_carries_the_real_appearance_onto_the_characte
     cast_reply = json.dumps(
         [{"name": "فوزية", "gender": "female", "appearance": "curly dark hair, slender build"}]
     )
-    lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}])
+    lines_reply = json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving", "scene": 0, "location": "a quiet room", "mood": "calm"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
 
@@ -337,7 +343,7 @@ def test_write_dialogue_screenplay_carries_the_real_gender_onto_the_character():
     # at all, and a character written as "الشاب" (the young man) was
     # given a woman's face. This must now reach the Character object.
     cast_reply = json.dumps([{"name": "أحمد", "gender": "MALE", "appearance": "short hair, broad build"}])
-    lines_reply = json.dumps([{"character": "أحمد", "line": "مرحبا", "action": "waving"}])
+    lines_reply = json.dumps([{"character": "أحمد", "line": "مرحبا", "action": "waving", "scene": 0, "location": "a quiet room", "mood": "calm"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
 
@@ -351,7 +357,7 @@ def test_write_dialogue_screenplay_carries_the_real_gender_onto_the_character():
 
 def test_write_dialogue_screenplay_strips_markdown_fences_on_both_calls():
     cast_reply = "```json\n" + _cast_reply(("فوزية", "female")) + "\n```"
-    lines_reply = "```json\n" + json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving"}]) + "\n```"
+    lines_reply = "```json\n" + json.dumps([{"character": "فوزية", "line": "مرحبا", "action": "waving", "scene": 0, "location": "a quiet room", "mood": "calm"}]) + "\n```"
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
 
@@ -380,9 +386,9 @@ def test_write_complete_dialogue_screenplay_requires_exactly_one_line_per_real_q
     cast_reply = _cast_reply(("الرجل", "male"), ("فوزية", "female"))
     lines_reply = json.dumps(
         [
-            {"character": "الرجل", "line": "مرحبا يا فوزية", "action": "smiling"},
-            {"character": "فوزية", "line": "أهلا بك", "action": "smiling back"},
-            {"character": "الرجل", "line": "كيف حالك اليوم؟", "action": "leaning in"},
+            {"character": "الرجل", "line": "مرحبا يا فوزية", "action": "smiling", "scene": 0, "location": "a quiet room", "mood": "calm"},
+            {"character": "فوزية", "line": "أهلا بك", "action": "smiling back", "scene": 0, "location": "a quiet room", "mood": "calm"},
+            {"character": "الرجل", "line": "كيف حالك اليوم؟", "action": "leaning in", "scene": 0, "location": "a quiet room", "mood": "calm"},
         ]
     )
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
@@ -401,8 +407,8 @@ def test_write_complete_dialogue_screenplay_raises_if_the_model_drops_a_quoted_m
     cast_reply = _cast_reply(("الرجل", "male"))
     lines_reply = json.dumps(
         [
-            {"character": "الرجل", "line": "الأولى", "action": ""},
-            {"character": "الرجل", "line": "الثانية", "action": ""},
+            {"character": "الرجل", "line": "الأولى", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
+            {"character": "الرجل", "line": "الثانية", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"},
         ]
     )
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
@@ -415,7 +421,7 @@ def test_write_complete_dialogue_screenplay_raises_if_the_model_drops_a_quoted_m
 def test_write_complete_dialogue_screenplay_prompt_forbids_narrator_and_demands_verbatim_copy():
     premise = 'قال: «مرحبا»'
     cast_reply = _cast_reply(("الرجل", "male"))
-    lines_reply = json.dumps([{"character": "الرجل", "line": "مرحبا", "action": ""}])
+    lines_reply = json.dumps([{"character": "الرجل", "line": "مرحبا", "action": "", "scene": 0, "location": "a quiet room", "mood": "calm"}])
     reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
     writer = DialogueWriterAgent(reasoning)
 
@@ -696,3 +702,154 @@ def test_route_message_rejects_edit_lines_with_no_real_edits():
 
     with pytest.raises(DialogueWriterError, match="gave no real edits"):
         writer.route_message(_screenplay_with_two_lines(), "", "غيّر شيئًا")
+
+
+# Owner's own definition of "فيلم سينمائي", 2026-10-23 ("مشاهد متعددة" -
+# multiple scenes) - real multi-scene screenplay tests.
+
+
+def test_write_dialogue_screenplay_groups_lines_into_real_distinct_scenes():
+    # Real, concrete multi-scene case: two scenes, different locations/
+    # moods, and a character who only appears in the second one - proves
+    # characters_present is derived from the real lines (فوزية never
+    # speaks in scene 1 and must not be listed there), not copied blindly
+    # from the whole cast.
+    cast_reply = _cast_reply(("فوزية", "female"), ("جويدة", "female"), ("الأب", "male"))
+    lines_reply = json.dumps(
+        [
+            {
+                "character": "فوزية", "line": "العشاء جاهز", "action": "smiling",
+                "scene": 0, "location": "a family kitchen in the evening", "mood": "warm and content",
+            },
+            {
+                "character": "جويدة", "line": "رائحته شهية", "action": "walking in",
+                "scene": 0, "location": "a family kitchen in the evening", "mood": "warm and content",
+            },
+            {
+                "character": "جويدة", "line": "أين أبي؟", "action": "stepping outside, worried",
+                "scene": 1, "location": "a dark street outside the house", "mood": "tense and uneasy",
+            },
+            {
+                "character": "الأب", "line": "أنا هنا", "action": "emerging from the shadows",
+                "scene": 1, "location": "a dark street outside the house", "mood": "tense and uneasy",
+            },
+        ]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    screenplay = writer.write_dialogue_screenplay("T", "p", line_count=4)
+
+    assert [l.scene for l in screenplay.lines] == [0, 0, 1, 1]
+    assert len(screenplay.scenes) == 2
+    scene0, scene1 = screenplay.scenes
+    assert scene0.index == 0
+    assert scene0.location == "a family kitchen in the evening"
+    assert scene0.mood == "warm and content"
+    assert scene0.characters_present == ["فوزية", "جويدة"]
+    assert scene1.index == 1
+    assert scene1.location == "a dark street outside the house"
+    assert scene1.mood == "tense and uneasy"
+    # فوزية never speaks in scene 1 - must not appear in its real cast.
+    assert scene1.characters_present == ["جويدة", "الأب"]
+
+
+def test_write_dialogue_screenplay_lines_prompt_asks_for_real_scene_data():
+    # Mirrors the narrator/verbatim-quote prompt tests above: proves the
+    # real instruction is actually sent to the model, not just that
+    # scenes happen to come out right when the mock already supplies them.
+    cast_reply = _cast_reply(("فوزية", "female"))
+    lines_reply = json.dumps(
+        [{"character": "فوزية", "line": "مرحبا", "action": "waving", "scene": 0, "location": "a room", "mood": "calm"}]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+    lines_system_prompt = reasoning.calls[1][0]
+    assert '"scene"' in lines_system_prompt
+    assert '"location"' in lines_system_prompt
+    assert '"mood"' in lines_system_prompt
+
+
+def test_write_dialogue_screenplay_rejects_a_non_integer_scene():
+    # Mutation check: deleting this validation would let a real screenplay
+    # crash deeper (or silently build a wrong scene grouping) instead of
+    # failing clearly, right here, before any real cost is spent.
+    cast_reply = _cast_reply(("فوزية", "female"))
+    lines_reply = json.dumps(
+        [{"character": "فوزية", "line": "مرحبا", "action": "waving", "scene": "first", "location": "a room", "mood": "calm"}]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="non-integer or negative 'scene'"):
+        writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+
+def test_write_dialogue_screenplay_rejects_a_negative_scene():
+    cast_reply = _cast_reply(("فوزية", "female"))
+    lines_reply = json.dumps(
+        [{"character": "فوزية", "line": "مرحبا", "action": "waving", "scene": -1, "location": "a room", "mood": "calm"}]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="non-integer or negative 'scene'"):
+        writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+
+def test_write_dialogue_screenplay_rejects_an_empty_location():
+    # Real design point (models.py's own DialogueSceneInfo docstring,
+    # restated in this file's module docstring): an empty value here is a
+    # real gap in what the model was explicitly asked for, never silently
+    # accepted as "not set yet" the way the original additive field was.
+    cast_reply = _cast_reply(("فوزية", "female"))
+    lines_reply = json.dumps(
+        [{"character": "فوزية", "line": "مرحبا", "action": "waving", "scene": 0, "location": "  ", "mood": "calm"}]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="real non-empty 'location'"):
+        writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+
+def test_write_dialogue_screenplay_rejects_an_empty_mood():
+    cast_reply = _cast_reply(("فوزية", "female"))
+    lines_reply = json.dumps(
+        [{"character": "فوزية", "line": "مرحبا", "action": "waving", "scene": 0, "location": "a room", "mood": ""}]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    with pytest.raises(DialogueWriterError, match="real non-empty 'mood'"):
+        writer.write_dialogue_screenplay("T", "p", line_count=1)
+
+
+def test_write_complete_dialogue_screenplay_also_groups_real_scenes():
+    # Same real grouping, going through /full's own prompt template -
+    # must not be a behavior that only works through write_dialogue_screenplay.
+    premise = 'قال: «مرحبا يا فوزية» فقالت: «أهلا بك»'
+    cast_reply = _cast_reply(("الرجل", "male"), ("فوزية", "female"))
+    lines_reply = json.dumps(
+        [
+            {
+                "character": "الرجل", "line": "مرحبا يا فوزية", "action": "smiling",
+                "scene": 0, "location": "a sunny garden", "mood": "lighthearted",
+            },
+            {
+                "character": "فوزية", "line": "أهلا بك", "action": "smiling back",
+                "scene": 0, "location": "a sunny garden", "mood": "lighthearted",
+            },
+        ]
+    )
+    reasoning = MockAgentReasoningClient(scripted_replies=[cast_reply, lines_reply])
+    writer = DialogueWriterAgent(reasoning)
+
+    screenplay = writer.write_complete_dialogue_screenplay("T", premise)
+
+    assert len(screenplay.scenes) == 1
+    assert screenplay.scenes[0].location == "a sunny garden"
+    assert screenplay.scenes[0].characters_present == ["الرجل", "فوزية"]

@@ -651,7 +651,26 @@ class BotConversation:
         for c in screenplay.characters:
             lines.append(f"- {c.name}")
         lines.append("")
+        # Owner's own definition of "فيلم سينمائي", 2026-10-23 ("مشاهد
+        # متعددة" - multiple scenes): the owner reads/edits this exact
+        # text before any real money is spent (the project's one human
+        # gate) - a real scene break that only exists inside
+        # screenplay.scenes/DialogueLine.scene and never reaches this
+        # message would be invisible to the one person who is supposed to
+        # review it. `scenes_by_index` stays empty for any screenplay
+        # written before this existed (models.py's own additive-field
+        # guarantee), so the loop below falls back to the flat,
+        # unnumbered rendering every existing test/fixture already
+        # expects - never a behavior change for a screenplay with no real
+        # scene structure.
+        scenes_by_index = {s.index: s for s in screenplay.scenes}
+        current_scene_index: int | None = None
         for l in screenplay.lines:
+            if scenes_by_index and l.scene != current_scene_index:
+                current_scene_index = l.scene
+                scene = scenes_by_index.get(current_scene_index)
+                if scene is not None:
+                    lines.append(f"🎬 المشهد {current_scene_index + 1}: {scene.location} ({scene.mood})")
             # Owner's instruction, 2026-10-20: a line marked /caption must
             # be visibly distinct here BEFORE approval - otherwise the
             # owner has no way to confirm which lines will actually cost

@@ -111,6 +111,31 @@ accepted and built into a real Character like any other name. `_parse_cast`
 now rejects any such name outright with `DialogueWriterError`, before a
 screenplay is ever built from it - a narrator can reach production only
 if this check is deleted, never because the model happened to comply.
+
+Owner's own definition of "فيلم سينمائي", 2026-10-23 ("فيه شخصيات
+متعددة و مشاهد متعددة و حوار و موسيقى" - multiple characters AND
+multiple scenes AND dialogue AND music): every screenplay this agent
+ever wrote before this had exactly one implicit scene - the same
+location, the same mood, for however many lines the premise produced,
+because nothing here ever asked the model to think in scenes at all.
+`DialogueScreenplay.scenes`/`DialogueLine.scene` (models.py) already
+existed as inert, additive fields from the first step toward this - this
+is the step that actually writes real values into them. Both line-writing
+prompts now ask for a real "scene"/"location"/"mood" on every line, and
+`_write()` groups the real parsed lines into real `DialogueSceneInfo`
+entries from that - never asked of the model as a second, separate
+array, because a scene's real cast (`characters_present`) is already
+fully determined by which real characters actually speak inside it; a
+second model-reported list of names could silently drift from the lines
+it is supposed to describe, the same class of bug `_parse_cast`'s
+duplicate-name check exists to prevent. `location`/`mood` ARE asked of
+the model (real creative content, not derivable from structure), and
+rejected here if either comes back empty - this is the first consumer
+of those fields that will ever be downstream of a real decision (what
+the owner reads before approving, eventually what a real music step
+scores), so an empty placeholder here is not "not set yet" the way the
+original additive field's own docstring allowed - it is a real gap in
+output the model was explicitly asked not to leave.
 """
 from __future__ import annotations
 
@@ -120,7 +145,7 @@ from dataclasses import dataclass, field
 
 from src.agents._text_parsing import parse_json_object, parse_json_object_array
 from src.integrations.reasoning_client import AgentReasoningClient
-from src.models import Character, DialogueLine, DialogueScreenplay
+from src.models import Character, DialogueLine, DialogueScreenplay, DialogueSceneInfo
 from src.workflows.character_photos import resolve_placeholder_voice
 
 _CAST_SYSTEM_PROMPT = """You are a casting director listing the speaking characters a short story needs.
@@ -150,11 +175,14 @@ _LINES_SYSTEM_PROMPT = """You are a screenwriter turning a premise and a fixed c
 Rules:
 - Output ONLY a JSON array of objects, nothing else - no markdown fences, no commentary.
 - The array must have EXACTLY {line_count} elements.
-- Each object has exactly three keys:
+- Each object has exactly these keys:
   - "character": one of these EXACT names (same spelling): {cast}
   - "line": what they actually SAY, in the SAME language as the premise, 1-2 short sentences a person would plausibly speak aloud - never a narrator's description of events.
   - "action": a short, visual-only English stage direction for this moment (facial expression, gesture, what they're doing) - NEVER repeat or translate the spoken line itself here, the video model lip-syncs the real audio and would render duplicated text as more speech.
-- The lines must flow as one continuous scene in order, matching the premise, with characters actually responding to each other.
+  - "scene": an integer, starting at 0 for the first scene and incrementing by 1 each real time the story moves to a genuinely different scene (a real change of location and/or a real time jump) - every line that stays in the same real scene as the line before it MUST repeat the SAME scene number. A short premise may be one real scene throughout (every line "scene": 0) - do not invent scene breaks that are not really there.
+  - "location": a short (one sentence, English) description of WHERE this scene physically happens (e.g. "a warm family kitchen in the evening") - the SAME exact text on every line that shares this scene's number.
+  - "mood": a short (a few words, English) emotional/atmospheric description of this scene (e.g. "tense and quietly heartbroken") - the SAME exact text on every line that shares this scene's number. This becomes the real cue a later music step scores this scene with - never a generic word like "neutral", describe what this specific scene actually feels like.
+- The lines must flow as one continuous story in order, matching the premise, with characters actually responding to each other, scene by scene.
 - The premise is the real source of truth, not a loose inspiration: if it already contains a character's actual words (quoted directly, e.g. in "quotes" or «guillemets»), use that EXACT wording for their line - do not paraphrase or invent a different line for a moment the premise already gives you.
 - Never give a character a line the premise explicitly says they did NOT say, or have them respond where the premise explicitly says they stayed silent or did not answer - invent dialogue only to fill genuine gaps the premise leaves open, never to contradict what it states.
 - NEVER write a "narrator" line that summarizes, recounts, or describes past events in past tense (e.g. "So I divorced her and stopped listening to her") - every single line must be something a character says TO another character, in the moment, inside a real scene. If the premise is first-person memoir prose, DRAMATIZE it: pick the real scenes it already describes with quoted dialogue, and have the real people in them speak directly to each other there - do not have the narrator summarize what happened between those scenes.
@@ -165,10 +193,13 @@ _COMPLETE_LINES_SYSTEM_PROMPT = """You are transcribing a real story's own quote
 Rules:
 - Output ONLY a JSON array of objects, nothing else - no markdown fences, no commentary.
 - The premise contains exactly {line_count} directly quoted dialogue moments (text inside «guillemets» or "quotes"). Output EXACTLY {line_count} array elements, one per quoted moment, IN THE SAME ORDER they appear in the premise. Do not skip any, do not merge two into one, do not add a line that is not one of the premise's own quoted moments.
-- Each object has exactly three keys:
+- Each object has exactly these keys:
   - "character": one of these EXACT names (same spelling): {cast}
   - "line": the quoted text for that moment, copied EXACTLY as written in the premise - not a single word paraphrased, shortened, or altered.
   - "action": a short, visual-only English stage direction for this moment (facial expression, gesture, what they're doing) - NEVER repeat or translate the spoken line itself here.
+  - "scene": an integer, starting at 0 for the first scene and incrementing by 1 each real time the story's own events move to a genuinely different scene (a real change of location and/or a real time jump between where one quoted moment happens and the next) - every quoted moment that is really part of the same scene as the one before it MUST repeat the SAME scene number. A story that stays in one place throughout is one real scene (every element "scene": 0) - do not invent scene breaks the real story does not have.
+  - "location": a short (one sentence, English) description of WHERE this scene physically happens, inferred from the real story - the SAME exact text on every element that shares this scene's number.
+  - "mood": a short (a few words, English) emotional/atmospheric description of this real scene - the SAME exact text on every element that shares this scene's number. This becomes the real cue a later music step scores this scene with - never a generic word like "neutral", describe what this specific real scene actually feels like.
 - NEVER create or use a "narrator" character - every quoted moment belongs to the real person who said it in the premise."""
 
 # Owner's standing instruction, 2026-10-21 ("اريد الحديث معه كما اتحدث
@@ -418,16 +449,27 @@ class DialogueWriterAgent:
         lines_system_prompt = lines_system_prompt_template.format(line_count=line_count, cast=", ".join(cast_names))
         lines_raw = self._complete(lines_system_prompt, premise)
         parsed_lines = parse_json_object_array(
-            lines_raw, ("character", "line", "action"), error_cls=DialogueWriterError
+            lines_raw, ("character", "line", "action", "scene", "location", "mood"), error_cls=DialogueWriterError
         )
         if len(parsed_lines) < line_count:
             raise DialogueWriterError(f"Reply returned {len(parsed_lines)} lines, needed {line_count}: {lines_raw!r}")
+        parsed_lines = parsed_lines[:line_count]
 
-        for item in parsed_lines[:line_count]:
+        for item in parsed_lines:
             if item["character"] not in cast_names:
                 raise DialogueWriterError(
                     f"Line speaker {item['character']!r} is not in the cast {cast_names}: {lines_raw!r}"
                 )
+            # Real validation, not just a prompt request the model can
+            # ignore: "scene" must be a real non-negative integer, and
+            # "location"/"mood" must be real, non-empty text - see this
+            # file's own module docstring (owner's 2026-10-23 finding) for
+            # why an empty value here is a real gap, not "not set yet".
+            if not isinstance(item.get("scene"), int) or item["scene"] < 0:
+                raise DialogueWriterError(f"Line item has a non-integer or negative 'scene': {item!r}")
+            for key in ("location", "mood"):
+                if not isinstance(item.get(key), str) or not item[key].strip():
+                    raise DialogueWriterError(f"Line item is missing a real non-empty {key!r}: {item!r}")
 
         # Owner's real, repeated complaint, 2026-10-22 ("كله الفيديو كله
         # صورة شخص يسرد قصة" - the whole video is one person's photo
@@ -446,7 +488,7 @@ class DialogueWriterAgent:
         # deterministically, before any real cost is spent.
         if len(cast_names) > 1:
             line_counts: dict[str, int] = {}
-            for item in parsed_lines[:line_count]:
+            for item in parsed_lines:
                 line_counts[item["character"]] = line_counts.get(item["character"], 0) + 1
             dominant_name, dominant_count = max(line_counts.items(), key=lambda kv: kv[1])
             dominant_share = dominant_count / line_count
@@ -468,10 +510,37 @@ class DialogueWriterAgent:
             for c in cast
         ]
         dialogue_lines = [
-            DialogueLine(index=i, character=item["character"], line=item["line"], action=item["action"])
-            for i, item in enumerate(parsed_lines[:line_count])
+            DialogueLine(
+                index=i, character=item["character"], line=item["line"], action=item["action"], scene=item["scene"]
+            )
+            for i, item in enumerate(parsed_lines)
         ]
-        return DialogueScreenplay(title=title, premise=premise, characters=characters, lines=dialogue_lines)
+        scenes = self._build_scenes(parsed_lines)
+        return DialogueScreenplay(
+            title=title, premise=premise, characters=characters, lines=dialogue_lines, scenes=scenes
+        )
+
+    @staticmethod
+    def _build_scenes(parsed_lines: list[dict]) -> list[DialogueSceneInfo]:
+        """Groups the real parsed lines into real DialogueSceneInfo entries,
+        in the order each scene number first appears. `characters_present`
+        is derived from which real characters actually speak inside that
+        scene's own lines - never asked of the model separately (see this
+        file's own module docstring for why a second, model-reported list
+        would risk silently drifting from the real lines it describes).
+        A scene's `location`/`mood` are taken from its first line - every
+        line sharing that scene number is required (above) to repeat the
+        same text, so the first occurrence is the real value either way."""
+        scenes_by_index: dict[int, DialogueSceneInfo] = {}
+        for item in parsed_lines:
+            scene_index = item["scene"]
+            scene = scenes_by_index.get(scene_index)
+            if scene is None:
+                scene = DialogueSceneInfo(index=scene_index, location=item["location"], mood=item["mood"])
+                scenes_by_index[scene_index] = scene
+            if item["character"] not in scene.characters_present:
+                scene.characters_present.append(item["character"])
+        return [scenes_by_index[i] for i in sorted(scenes_by_index)]
 
     @staticmethod
     def _parse_cast(raw_reply: str) -> list[dict]:

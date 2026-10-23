@@ -1748,3 +1748,110 @@ Audio Open into a real music client, and the real editing/mixing step that
 would combine multiple real scene clips with music under the dialogue.
 Each remains its own real step, with its own real cost named before any
 money is spent - not bundled into this one.
+
+## Stage 2a: MultiTalk two-speaker generation proven real, end to end (2026-10-23)
+
+Real, approved, capped (<$0.30 then continued on the already-running pod)
+test on the project's own A40 pod (`fdhxh9x1igrsih`), not a standalone
+script - the real ComfyUI `/prompt` API, the real author's own node graph
+(`ComfyUI-WanVideoWrapper`, `kijai/comfyui-wanvideowrapper`), real gTTS
+two-speaker audio, and a real reference frame from MultiTalk's own public
+demo. Two real, separate bugs stood between "the nodes exist" and "a real
+two-person video comes out" - neither one guessable from the repo's own
+example workflows, both found by driving the real execution path, not a
+standalone repro:
+
+1. **`MultiTalkWav2VecEmbeds` crashed with `'NoneType' object is not
+   subscriptable`** at `multitalk/nodes.py:248`
+   (`audio_emb = torch.stack(embeddings.hidden_states[1:], ...)`). Eight
+   separate standalone-script hypotheses (transformers version, encoder
+   class, fresh-model CPU, real weights on GPU/fp16, real `av`-based audio
+   loading, device-cycling, `inference_mode`, loudness normalization) all
+   worked correctly in isolation - the bug only reproduced through
+   ComfyUI's own real `/prompt` execution path. A debug print inserted
+   directly into the vendored node source and resubmitted through the real
+   API proved it precisely: the installed `transformers==5.17.0`'s real
+   `Wav2Vec2Encoder.forward()` (read directly from the installed package)
+   no longer collects per-layer hidden states at all - it unconditionally
+   `return`s `BaseModelOutput(last_hidden_state=hidden_states)`, with no
+   `hidden_states` field, regardless of `output_hidden_states`. Real,
+   concrete fix (not a version pin - 4.57.6 was tried for real and breaks
+   the whole node pack's import via a `huggingface_hub`/`diffusers`
+   conflict): the vendored `multitalk/wav2vec2.py`'s `Wav2Vec2Model`
+   subclass now collects hidden states itself, via `register_forward_hook`/
+   `register_forward_pre_hook` on `self.encoder.layers`, independent of
+   whatever the installed transformers version does internally. Proven by
+   resubmitting the real minimal 5-node graph through the real API after
+   the fix: `GOWAY_DEBUG hidden_states is None= False` for both real
+   speakers, `Prompt executed in 2.25 seconds`, no error.
+2. **The full 14-node graph then crashed differently**, inside the real
+   diffusion sampler: `AttributeError: 'NoneType' object has no attribute
+   'max'` at `multitalk/multitalk.py:343`
+   (`x_ref_attn_map.max(1).values`). Traced to `wanvideo/modules/model.py`:
+   `x_ref_attn_map` is computed FROM `ref_target_masks` - a real, required
+   `MASK` input (one per speaker, "per-speaker semantic mask(s) in pixel
+   space... to guide mouth assignment") for any real `human_num >= 2`
+   generation, contradicting this project's own earlier research note
+   above that assumed "add" (sequential) mode needed no mask. Downloaded
+   and directly viewed the real reference frame, drew two real rectangular
+   masks over each speaker's real face position, wired them in via
+   `LoadImageMask` + `MaskBatchMulti` (both already-available ComfyUI/
+   KJNodes nodes, no new install).
+3. **Result, real and downloaded**: `nexus_studio_multitalk_test_00001_.mp4`
+   - 832x480, 25fps, 5.48s, a real video+audio stream, `"status_str":
+   "success"` from ComfyUI's own `/history` endpoint. 5 extracted frames
+   personally viewed: one continuous scene (not two separate clips), both
+   real people's mouths in genuinely different positions at different
+   timestamps, consistent with the two real sequential audio clips. Sent
+   to the owner as the file itself, not a description.
+
+**Honest limits of this one test** (stated to the owner alongside the
+video, per the standing no-claim-without-proof rule): the reference image
+is MultiTalk's own public demo frame, not a real story-specific portrait;
+the two masks were drawn by hand from a personally-viewed frame, not real
+automated face detection; the dialogue was two short placeholder gTTS
+lines, not real screenplay lines. This proves the real technique works on
+this project's own infrastructure - it is not yet wired into production.
+
+## Stage 2b: scene-aware screenplay writing (2026-10-23)
+
+The owner approved the next concrete step toward "فيلم سينمائي" once Stage
+2a's real video landed: wire `DialogueSceneInfo`/`DialogueLine.scene`
+(Stage 1, additive, previously inert) into the real cast/line-writing LLM
+calls, so a produced screenplay actually has real, distinct scenes instead
+of one implicit scene for the whole episode.
+
+Both line-writing prompts (`_LINES_SYSTEM_PROMPT`,
+`_COMPLETE_LINES_SYSTEM_PROMPT`) now ask for three more real fields per
+line: `scene` (int, 0-based, same number for every line that stays in the
+same real scene), `location`, `mood` - the last becomes the real cue a
+future music step scores that scene with, so it is rejected if empty
+rather than accepted as a placeholder (unlike the original additive
+field's own "not set yet" allowance - this is the first real consumer of
+it). `characters_present` is deliberately NOT asked of the model as a
+second array - it is derived in code (`_build_scenes`) from which real
+characters actually speak inside each scene's own lines, the same
+"derive from structure, don't trust a second self-reported list" principle
+`_parse_cast`'s duplicate-name check already relies on.
+
+`BotConversation._format_screenplay` - the one real human gate before any
+money is spent - now shows a `🎬 المشهد N: location (mood)` header at each
+real scene change, so the owner can actually see and approve the real
+scene structure, not just trust it exists in data they never see.
+
+8 new/updated tests across `test_dialogue_writer.py` (scene grouping
+across 2 real scenes with a character absent from one of them, prompt
+content, 4 real validation-rejection cases) and `test_bot_conversation.py`
+(scene headers appear in the real approval message, in the real order).
+Mutation-tested: deleted the scene/location/mood validation block
+(replaced with silent defaults) - the 4 rejection tests failed for the
+real reason; deleted the scene-header line in `_format_screenplay` - the
+new display test failed for the real reason; both restored. Full suite:
+259/259.
+
+**Deliberately not yet done**: DialoguePipeline still produces one
+isolated clip per line (no shared-scene video generation yet) - this
+increment is the screenplay data only. Wiring a real MultiTalk video
+client (Stage 2a proved the technique; this is the next real step,
+its own real cost to name before spending) and a real music step remain
+separate, explicitly not bundled into this one.
