@@ -77,6 +77,31 @@ class Character:
 
 
 @dataclass
+class DialogueSceneInfo:
+    """Real metadata for one scene of a DialogueScreenplay - the owner's
+    own definition of "فيلم سينمائي" (2026-10-23): "شخصيات متعددة و مشاهد
+    متعددة و حوار و موسيقى" (multiple characters AND multiple scenes AND
+    dialogue AND music - a real cinematic reel). Everything the pipeline
+    produced before this had exactly one implicit scene (every line shot
+    the same way, no location change, no mood, no music) - this is the
+    first real step toward multiple real scenes, added deliberately
+    additive (see DialogueLine.scene and DialogueScreenplay.scenes'
+    own comments) so it changes nothing about how an existing screenplay
+    with no scene structure is read, displayed, edited, or produced.
+
+    `mood` is real production metadata, not flavour text: it is the
+    prompt a future music-generation step (Stable Audio Open, picked
+    2026-10-23 after real research - see docs/SOURCES.md) would use to
+    score THIS scene specifically, so two scenes of the same episode get
+    two different real cues, not one track reused for the whole film."""
+
+    index: int
+    location: str
+    characters_present: list[str] = field(default_factory=list)
+    mood: str = ""
+
+
+@dataclass
 class DialogueLine:
     """One beat of a DialogueScreenplay: a single character speaking a
     single line, the unit DialoguePipeline turns into one real
@@ -91,6 +116,14 @@ class DialogueLine:
     character: str
     line: str
     action: str = ""
+    # Real, additive field (2026-10-23): which real scene (DialogueScreenplay
+    # .scenes[i].index) this line belongs to. Defaults to 0 so every
+    # screenplay ever produced before scenes existed - and every real test
+    # fixture in this repository - is implicitly "one scene, index 0" and
+    # keeps working completely unchanged; nothing downstream (conversation.py's
+    # /edit, the cost estimate, DialoguePipeline.produce()) has to know
+    # scenes exist until it is deliberately taught to.
+    scene: int = 0
     # Owner's instruction, 2026-10-20 ("نحذف الام و يبقى حوارها... مكتوب
     # على الشاشة" - remove the mother [as a speaking role], her dialogue
     # stays as on-screen text): a real, concrete way to cut cost on a line
@@ -115,6 +148,15 @@ class DialogueScreenplay:
     premise: str
     characters: list[Character] = field(default_factory=list)
     lines: list[DialogueLine] = field(default_factory=list)
+    # Real, additive field (2026-10-23) - see DialogueLine.scene's own
+    # comment for why this never breaks an existing flat screenplay. An
+    # empty list (the default) means "no real scene structure yet", the
+    # exact shape every screenplay had before this. Not yet written by
+    # DialogueWriterAgent or read by DialoguePipeline - this is the data
+    # shape alone, the first of several real steps toward a genuine
+    # multi-scene film (see docs/SOURCES.md, the owner's own 2026-10-23
+    # definition of "فيلم سينمائي").
+    scenes: list[DialogueSceneInfo] = field(default_factory=list)
 
 
 @dataclass

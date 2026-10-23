@@ -1693,3 +1693,58 @@ banned. No model proven in this codebase today produces both real
 audio-driven lip-sync AND true multi-character cinematic scene composition
 in one shot - this is a real, open technical gap (tracked as task #37/#38),
 not something a prompt change resolves.
+
+## Stage 1 of the real "film" plan: scene data model + music research (2026-10-23)
+
+Owner's own precise definition, given directly after rejecting the first
+self-hosted S2V production run: "الفيلم السينمائي هو فيه شخصيات متعددة و
+مشاهد متعددة و حوار و موسيقى" (a cinematic film has multiple characters AND
+multiple scenes AND dialogue AND music - a real reel). This names two real
+gaps this codebase had never addressed at all: no scene structure (every
+line was shot the same way, no location/camera change) and no music
+component whatsoever.
+
+**Free research, no money, no infra touched:**
+- Confirmed via real downloaded/viewed frames (not captions) that
+  **MultiTalk** (MeiGen-AI, NeurIPS 2025, Apache 2.0) genuinely produces
+  multi-person scenes sharing one real environment and camera framing - a
+  car interior with two real-looking people talking and reacting to each
+  other, and a cartoon example (Nick/Judy) sharing a table. Verified by
+  downloading the project's own official demo videos directly
+  (`meigen-ai.github.io/multi-talk/videos/...`, NOT `github.com/user-
+  attachments` - that host is intercepted by this session's GitHub proxy
+  and cannot be fetched) and extracting real frames with ffmpeg.
+- Checked whether the public shared Hugging Face demo
+  (`fffiloni/Meigen-MultiTalk`) could be used for a genuinely free real
+  test: confirmed NOT possible - its own `app.py` checks
+  `torch.cuda.is_available()` and the Space's real runtime
+  (`huggingface.co/api/spaces/.../runtime`) shows `hardware: cpu-basic` -
+  no GPU attached, the page itself says it must be duplicated onto a
+  private paid GPU to run. No free path to real inference exists for this
+  model; smallest realistic real test on the project's own A40 pod is
+  under $0.20, not $0.
+- Music: recommended **Stable Audio Open 1.0** (Stability AI) - real
+  commercial-safe license at this project's scale, real ~8-12GB VRAM
+  (fits the existing 50GB A40 alongside video generation), up to 47s
+  stereo per real generation, plain Python inference (no ComfyUI needed).
+  Real stock-library alternatives (YouTube Audio Library, Pixabay Music)
+  were checked and rejected - neither has a real API for automated,
+  mood-tagged selection, only manual browsing.
+
+**New code, additive only, zero behavior change**: `DialogueSceneInfo`
+(`models.py`) - index/location/characters_present/mood - and two new
+fields, both defaulting to the pre-existing shape so every screenplay ever
+produced keeps working unchanged: `DialogueLine.scene: int = 0` and
+`DialogueScreenplay.scenes: list[DialogueSceneInfo] = []`. Not yet read or
+written by `DialogueWriterAgent` or `DialoguePipeline` - this is the data
+shape alone, the first of several real steps. 6 new tests
+(`tests/test_models.py`), mutation-tested (changed the real default
+`scene: int = 0` to `1`, confirmed the backward-compatibility test fails
+for the real reason, restored). Full suite: 251/251.
+
+**Deliberately not yet done**: wiring scenes into the cast/line-writing
+LLM prompts, wiring MultiTalk into a real video client, wiring Stable
+Audio Open into a real music client, and the real editing/mixing step that
+would combine multiple real scene clips with music under the dialogue.
+Each remains its own real step, with its own real cost named before any
+money is spent - not bundled into this one.
