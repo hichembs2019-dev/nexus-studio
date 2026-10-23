@@ -157,6 +157,17 @@ class ShotPlan:
 
 
 @dataclass
+class CompiledShotPrompt:
+    """The final generation prompts for one ShotPlan, written by
+    ShotPromptCompiler (Groq): one for the shot's reference still image,
+    one for the speech-to-video model. Additive: nothing reads it yet."""
+
+    line_index: int
+    image_prompt: str
+    video_prompt: str
+
+
+@dataclass
 class DialogueScreenplay:
     """The dialogue-native counterpart to Screenplay (models.py) - real
     characters speaking real lines, the actual ask ("مسلسلات وأفلام ... و
