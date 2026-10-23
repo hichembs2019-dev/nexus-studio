@@ -249,10 +249,13 @@ class ProducedDialogueEpisode:
     # the episode over it.
     portrait_cost_usd: float = 0.0
     portrait_failures: list[tuple[str, str]] = field(default_factory=list)
+    # Cinematic shot mode: the real cost of every flux-2-dev shot still
+    # generated in this run, including stills whose video then failed.
+    shot_image_cost_usd: float = 0.0
 
     @property
     def total_cost_usd(self) -> float:
-        return sum(c.cost_usd for c in self.clips) + self.portrait_cost_usd
+        return sum(c.cost_usd for c in self.clips) + self.portrait_cost_usd + self.shot_image_cost_usd
 
 
 @dataclass

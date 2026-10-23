@@ -114,7 +114,15 @@ class SelfHostedS2VVideoClient(ReplicateVideoClient):
         comfyui_client_factory: Callable[[str], ComfyUIS2VClient] = RealComfyUIS2VClient,
         timeout_seconds: float = 1800,
         poll_interval_seconds: float = 5,
+        # 640x640 is the size the real S2V proof ran at (docs/SOURCES.md).
+        # The cinematic shot path (app.py) asks for 832x480 instead - the
+        # size MultiTalk was proven at on this same pod; NOT yet proven
+        # with WanSoundImageToVideo itself.
+        width: int = 640,
+        height: int = 640,
     ):
+        self._width = width
+        self._height = height
         self._runpod_client = runpod_client
         self._pod_id = pod_id
         self._comfyui_client_factory = comfyui_client_factory
@@ -140,6 +148,8 @@ class SelfHostedS2VVideoClient(ReplicateVideoClient):
             audio_filename=audio_name,
             audio_duration_seconds=audio_duration,
             seed=random.randint(0, 2**31 - 1),
+            width=self._width,
+            height=self._height,
         )
         prompt_id = comfy.submit(prompt_body)
         outputs = comfy.wait_for_completion(

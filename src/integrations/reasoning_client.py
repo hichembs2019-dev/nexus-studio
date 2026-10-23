@@ -101,13 +101,26 @@ class RealGeminiReasoningClient(AgentReasoningClient):
     _RETRY_DELAY_SECONDS = 2
     _RATE_LIMIT_RETRY_DELAY_SECONDS = 20
 
-    def __init__(self, api_key: str, model: str):
+    def __init__(self, api_key: str, model: str, fallback: AgentReasoningClient | None = None):
         from google import genai
 
         self._client = genai.Client(api_key=api_key)
         self._model = model
+        # Same optional `fallback` as RealGroqReasoningClient - used when
+        # Gemini is the PRIMARY (the cinematic shot director, app.py), so
+        # a Gemini outage falls over to Groq instead of stopping the run.
+        self._fallback = fallback
 
     def complete(self, system_prompt: str, user_prompt: str) -> str:
+        try:
+            return self._complete(system_prompt, user_prompt)
+        except Exception as exc:
+            if self._fallback is None:
+                raise
+            logger.warning("Gemini reasoning call failed, falling back: %s", exc)
+            return self._fallback.complete(system_prompt, user_prompt)
+
+    def _complete(self, system_prompt: str, user_prompt: str) -> str:
         from google.genai import errors
 
         contents = f"{system_prompt}\n\n{user_prompt}"

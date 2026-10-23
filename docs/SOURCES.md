@@ -1950,3 +1950,21 @@ step (Stable Audio Open, Stage 1) and extending pairing beyond two
 speakers (MultiTalk's own documented ceiling is four, but only two has
 ever actually run on this project's infrastructure) remain separate,
 unstarted real steps.
+
+## Cinematic shot mode: Gemini director, Groq compiler, flux-2-dev shot stills (2026-10-23)
+
+Owner's complaint: every produced clip looked like a narrator - one person facing the camera, talking. Root cause found in code, not in the screenplay: `PORTRAIT_STYLE_SUFFIX` asked for "looking directly at camera", one cached portrait was reused for every line of a character, and every line got the fixed "emotional close-up shot" suffix. The speech-to-video model animates the image it is given, so no prompt change alone could add a new angle.
+
+**The chain** (behind the explicit `CINEMATIC_SHOTS_ENABLED` switch, off by default):
+1. `ShotDirectorAgent` (Gemini, Groq as fallback) plans one `ShotPlan` per line. Code rejects a gaze at the camera/lens/viewer/audience and a 3+ line screenplay shot with one single shot type.
+2. `ShotPromptCompiler` (Groq, Gemini as fallback) writes one image prompt and one video prompt per shot. Code writes the director's framing/angle/lighting/gaze/movement/environment into every prompt, rejects camera gaze and Arabic text, and never sends the dialogue.
+3. `RealFlux2ShotImageClient` renders the shot still from the speaker's portrait (plus the scene partner's portrait for two-shot/over-the-shoulder). Both planning steps run before any paid call; a failure there spends nothing.
+4. The speech-to-video model animates that still with the compiled video prompt. In this mode MultiTalk pairing is not used (it animates two portraits pasted side by side).
+
+**Facts this relies on, with sources:**
+- `flux-2-dev` input fields, read from Replicate's own model files (`replicate.com/black-forest-labs/flux-2-dev/llms.txt`, `/api/schema`, 2026-10-23): `prompt` (required), `input_images` (array of URIs, max 5), `aspect_ratio` (enum: match_input_image, custom, 1:1, 16:9, 3:2, 2:3, 4:5, 5:4, 9:16, 3:4, 4:3), `output_format` (webp/jpg/png). `width`/`height` are documented for text-to-image mode only, so `aspect_ratio="16:9"` is sent and the real output size is measured with ffprobe.
+- `flux-2-dev` price: Replicate's own blog (2025-11-25) "$0.012 per input and output megapixels"; third-party listings show $0.014 in 2026. The code uses $0.014, rounding each image up to whole megapixels. **Not confirmed by a real billed run.**
+- `flux-dev` (portraits): "$0.025 / output image" on `replicate.com/pricing` - the existing placeholder `PRICE_PER_IMAGE_USD_UNVERIFIED = 0.025` matches it.
+- Face-consistency options rejected for now: PuLID / InstantID / IP-Adapter FaceID all need InsightFace models, whose README says "non-commercial research purposes only" - this project publishes to YouTube.
+
+**Still unverified, said plainly:** no real run of this chain yet; real face consistency across shots; the real billed price; whether Replicate-hosted FLUX.2 [dev] output may be used commercially; and the self-hosted S2V graph at 832x480 (only 640x640 was proven; 832x480 was proven for MultiTalk on the same pod).
