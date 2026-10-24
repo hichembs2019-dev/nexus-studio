@@ -145,6 +145,12 @@ class SelfHostedS2VVideoClient(ReplicateVideoClient):
         self._last_render_seconds: float | None = None
         self._clock = time.monotonic
 
+    def prepare(self) -> None:
+        # Owner's report, 2026-10-24: Runpod refused with 402 (balance too
+        # low) on 7 lines in a row, and each of those lines had already
+        # paid for its flux-2-dev still. The pod is now readied first.
+        ensure_pod_ready(self._runpod_client, self._pod_id)
+
     def billed_seconds(self, clip_duration_seconds: float) -> float:
         # Owner's instruction, 2026-10-24: show the real RunPod cost. The
         # pod is paid per second it runs, so the real GPU time of a clip

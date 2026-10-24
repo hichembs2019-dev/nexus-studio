@@ -28,6 +28,9 @@ class ComfyUIS2VError(Exception):
     pass
 
 
+MAX_CONSECUTIVE_POLL_ERRORS = 12
+
+
 class ComfyUIS2VClient(ABC):
     @abstractmethod
     def upload_file(self, filename: str, content: bytes, content_type: str) -> str:
@@ -88,10 +91,25 @@ class RealComfyUIS2VClient(ComfyUIS2VClient):
         import httpx
 
         deadline = time.monotonic() + timeout_seconds
+        consecutive_errors = 0
         while time.monotonic() < deadline:
-            response = httpx.get(f"{self._base_url}/history/{prompt_id}", timeout=30)
-            response.raise_for_status()
-            history = response.json()
+            # Owner's report, 2026-10-24: one 502 Bad Gateway from the
+            # Runpod proxy while polling failed a whole line whose render
+            # may still have been running. A short run of proxy errors is
+            # waited out; a long one is still a real failure.
+            try:
+                response = httpx.get(f"{self._base_url}/history/{prompt_id}", timeout=30)
+                response.raise_for_status()
+                history = response.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                consecutive_errors += 1
+                if consecutive_errors >= MAX_CONSECUTIVE_POLL_ERRORS:
+                    raise ComfyUIS2VError(
+                        f"ComfyUI S2V run {prompt_id}: {consecutive_errors} polls in a row failed, last: {exc}"
+                    ) from exc
+                time.sleep(poll_interval_seconds)
+                continue
+            consecutive_errors = 0
             entry = history.get(prompt_id)
             if entry is not None:
                 status = entry.get("status", {})

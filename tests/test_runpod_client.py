@@ -388,3 +388,15 @@ def test_waiting_for_running_fails_fast_on_error_status(monkeypatch, tmp_path):
 
     with pytest.raises(RunpodClientError, match="went to ERROR"):
         ensure_pod_ready(client, "old", state_path=str(tmp_path / "s.json"))
+
+
+def test_a_402_low_balance_on_start_is_a_balance_error(monkeypatch):
+    import httpx
+
+    from src.integrations.runpod_client import RunpodBalanceError
+
+    body = '{"detail":"Your account balance is too low to rent a pod. Please add funds to your account.","status":402}'
+    monkeypatch.setattr(httpx, "post", lambda url, *, headers, json, timeout: _FakeResponse(402, text=body))
+
+    with pytest.raises(RunpodBalanceError, match="balance is too low"):
+        RealRunpodClient("real-key").start_pod("pod-123")

@@ -117,6 +117,11 @@ class ReplicateVideoClient(ABC):
         ReplicateVideoError on a failed prediction or an unexpected
         response shape."""
 
+    def prepare(self) -> None:
+        """Called before any paid step of a line (the shot still). Raises
+        if this provider cannot run right now, so nothing is paid for a
+        line whose video can never be made."""
+
     def billed_seconds(self, clip_duration_seconds: float) -> float:
         """Seconds the last clip is charged for. Replicate bills by output
         length; a self-hosted pod bills by how long it actually ran."""
