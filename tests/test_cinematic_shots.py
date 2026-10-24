@@ -93,9 +93,9 @@ def _pipeline(tmp_path, *, shot_types=("wide", "close_up", "medium"), video=None
     compiler = ShotPromptCompiler(MockAgentReasoningClient([_compiler_reply(n)]))
     video = video or MockReplicateVideoClient(scripted_bytes=_mp4(tmp_path / "src.mp4"))
     shot_client = shot_client or MockShotImageClient(scripted_bytes=_jpeg(tmp_path / "shot.jpg", "red"))
+    kwargs.setdefault("image_client", MockReplicateImageClient(scripted_bytes=_jpeg(tmp_path / "portrait.jpg")))
     pipeline = DialoguePipeline(
         video, MockTTSClient(), str(tmp_path / "out"),
-        image_client=MockReplicateImageClient(scripted_bytes=_jpeg(tmp_path / "portrait.jpg")),
         shot_director=director, shot_compiler=compiler, shot_image_client=shot_client,
         **kwargs,
     )
@@ -131,6 +131,20 @@ def test_shot_still_cost_is_measured_and_counted_in_the_total(tmp_path):
     assert produced.total_cost_usd == pytest.approx(
         sum(c.cost_usd for c in produced.clips) + produced.portrait_cost_usd + 3 * 2 * PRICE
     )
+
+
+def test_every_shot_of_a_character_reuses_that_characters_portrait_seed(tmp_path):
+    image_client = MockReplicateImageClient(scripted_bytes=_jpeg(tmp_path / "portrait.jpg"))
+    pipeline, _, shot_client = _pipeline(tmp_path, shot_types=("wide", "close_up", "medium", "close_up"), image_client=image_client)
+
+    pipeline.produce(_screenplay(4))
+
+    # Lines 0,2 are فوزية and lines 1,3 are جويدة (_screenplay alternates).
+    assert shot_client.seeds[0] == shot_client.seeds[2]
+    assert shot_client.seeds[1] == shot_client.seeds[3]
+    assert shot_client.seeds[0] != shot_client.seeds[1]
+    assert sorted(image_client.seeds) == sorted({shot_client.seeds[0], shot_client.seeds[1]})
+    assert all(0 <= s < 2**31 for s in shot_client.seeds)
 
 
 def test_a_two_shot_also_sends_the_scene_partners_portrait(tmp_path):
@@ -231,7 +245,7 @@ def test_flux2_client_sends_the_documented_input_fields(monkeypatch):
     monkeypatch.setattr(httpx, "post", fake_post)
     monkeypatch.setattr(httpx, "get", fake_get)
 
-    out = RealFlux2ShotImageClient("r8").generate_shot_image("a shot", [(b"face", "image/jpeg")])
+    out = RealFlux2ShotImageClient("r8").generate_shot_image("a shot", [(b"face", "image/jpeg")], seed=42)
 
     assert out == b"jpeg-bytes"
     assert posted["url"] == FLUX2_DEV_ENDPOINT
@@ -240,6 +254,7 @@ def test_flux2_client_sends_the_documented_input_fields(monkeypatch):
         "input_images": ["data:image/jpeg;base64," + base64.b64encode(b"face").decode()],
         "aspect_ratio": "16:9",
         "output_format": "jpg",
+        "seed": 42,
     }}
 
 

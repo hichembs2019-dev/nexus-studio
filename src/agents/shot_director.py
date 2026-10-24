@@ -51,6 +51,7 @@ Reply with ONLY a JSON array, one object per line, in line order, each with exac
 Rules:
   - Vary the coverage like a real film: establish each new scene with a wider shot, then alternate shot types and angles between lines.
   - The character is always inside the scene's real location, interacting with it - never posed against a plain background.
+  - Film the emotion of each line, not just its speaker: read the line's dialogue and the scene's mood, and let the shot carry it - tighter shots and a slow push-in for confession, grief or anger; low-key, high-contrast light for tension; a high angle for a character who is crushed or pleading. A neutral, evenly lit shot is wrong for an emotional line.
   - English only in every value. Never copy or translate the dialogue into any value.
 """
 

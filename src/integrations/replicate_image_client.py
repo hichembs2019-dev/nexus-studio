@@ -81,19 +81,24 @@ def _post_with_retry(headers: dict, body: dict, endpoint: str = ENDPOINT):
 
 class ReplicateImageClient(ABC):
     @abstractmethod
-    def generate_image(self, prompt: str) -> bytes:
+    def generate_image(self, prompt: str, seed: int | None = None) -> bytes:
         """Submits one real text-to-image prediction, blocks until it
-        completes, and returns the real image bytes. Raises
-        ReplicateImageError on a failed prediction or an unexpected
-        response shape."""
+        completes, and returns the real image bytes. `seed` is flux-dev's
+        own documented "seed" input (replicate.com/black-forest-labs/
+        flux-dev/llms.txt, read 2026-10-24: "Random seed. Set for
+        reproducible generation."). Raises ReplicateImageError on a
+        failed prediction or an unexpected response shape."""
 
 
 class RealReplicateImageClient(ReplicateImageClient):
     def __init__(self, api_token: str):
         self._api_token = api_token
 
-    def generate_image(self, prompt: str) -> bytes:
-        return _run_prediction(self._api_token, ENDPOINT, {"prompt": prompt})
+    def generate_image(self, prompt: str, seed: int | None = None) -> bytes:
+        model_input: dict = {"prompt": prompt}
+        if seed is not None:
+            model_input["seed"] = seed
+        return _run_prediction(self._api_token, ENDPOINT, model_input)
 
 
 def _run_prediction(api_token: str, endpoint: str, model_input: dict) -> bytes:
@@ -168,9 +173,11 @@ class MockReplicateImageClient(ReplicateImageClient):
     def __init__(self, scripted_bytes: bytes = b"fake-replicate-portrait-jpeg-bytes"):
         self._scripted_bytes = scripted_bytes
         self.calls: list[str] = []
+        self.seeds: list[int | None] = []
 
-    def generate_image(self, prompt: str) -> bytes:
+    def generate_image(self, prompt: str, seed: int | None = None) -> bytes:
         self.calls.append(prompt)
+        self.seeds.append(seed)
         return self._scripted_bytes
 
 
@@ -219,17 +226,24 @@ def estimated_shot_image_usd(price_per_megapixel_usd: float = FLUX2_DEV_PRICE_PE
 
 class ShotImageClient(ABC):
     @abstractmethod
-    def generate_shot_image(self, prompt: str, reference_images: list[tuple[bytes, str]]) -> bytes:
+    def generate_shot_image(
+        self, prompt: str, reference_images: list[tuple[bytes, str]], seed: int | None = None
+    ) -> bytes:
         """One real image-editing prediction: `reference_images` is a list
         of (bytes, mime) - the speaking character's portrait first.
-        Returns the real image bytes. Raises ReplicateImageError."""
+        `seed` is flux-2-dev's own documented "seed" input
+        (replicate.com/black-forest-labs/flux-2-dev/llms.txt, read
+        2026-10-24). Returns the real image bytes. Raises
+        ReplicateImageError."""
 
 
 class RealFlux2ShotImageClient(ShotImageClient):
     def __init__(self, api_token: str):
         self._api_token = api_token
 
-    def generate_shot_image(self, prompt: str, reference_images: list[tuple[bytes, str]]) -> bytes:
+    def generate_shot_image(
+        self, prompt: str, reference_images: list[tuple[bytes, str]], seed: int | None = None
+    ) -> bytes:
         import base64
 
         if not reference_images:
@@ -247,6 +261,8 @@ class RealFlux2ShotImageClient(ShotImageClient):
             "aspect_ratio": SHOT_ASPECT_RATIO,
             "output_format": "jpg",
         }
+        if seed is not None:
+            model_input["seed"] = seed
         return _run_prediction(self._api_token, FLUX2_DEV_ENDPOINT, model_input)
 
 
@@ -255,9 +271,13 @@ class MockShotImageClient(ShotImageClient):
         self._scripted_bytes = scripted_bytes
         self._fail = fail
         self.calls: list[tuple[str, list[tuple[bytes, str]]]] = []
+        self.seeds: list[int | None] = []
 
-    def generate_shot_image(self, prompt: str, reference_images: list[tuple[bytes, str]]) -> bytes:
+    def generate_shot_image(
+        self, prompt: str, reference_images: list[tuple[bytes, str]], seed: int | None = None
+    ) -> bytes:
         self.calls.append((prompt, reference_images))
+        self.seeds.append(seed)
         if self._fail:
             raise ReplicateImageError("mock flux-2-dev failure")
         return self._scripted_bytes

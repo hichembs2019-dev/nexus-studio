@@ -49,6 +49,29 @@ def test_generate_image_submits_polls_and_downloads_the_real_image(monkeypatch):
     assert data == b"real-jpeg-bytes"
 
 
+def test_generate_image_sends_the_seed_when_given(monkeypatch):
+    posted = {}
+
+    def fake_post(url, *, headers, json, timeout):
+        posted["body"] = json
+        return _FakeResponse(status_code=201, json_data={"id": "p-1", "urls": {"get": "https://api.replicate.com/v1/predictions/p-1"}})
+
+    def fake_get(url, *, headers=None, timeout=30):
+        if url.endswith("/p-1"):
+            return _FakeResponse(status_code=200, json_data={"status": "succeeded", "output": "https://real.cdn/portrait.jpg"})
+        return _FakeResponse(status_code=200, content=b"real-jpeg-bytes")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    RealReplicateImageClient("real-replicate-token").generate_image("a portrait", seed=7)
+
+    assert posted["body"] == {"input": {"prompt": "a portrait", "seed": 7}}
+
+
 @pytest.mark.parametrize(
     "output,expected_url",
     [

@@ -161,7 +161,7 @@ def test_produce_fails_a_characters_lines_when_it_has_no_appearance_description(
 
 def test_produce_fails_the_characters_lines_when_real_portrait_generation_fails(tmp_path):
     class _FailingImageClient:
-        def generate_image(self, prompt):
+        def generate_image(self, prompt, seed=None):
             raise ReplicateImageError("Replicate image job failed: simulated real failure")
 
     fal_video = MockReplicateVideoClient()
