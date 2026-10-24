@@ -83,6 +83,13 @@ class ShotPromptCompilerError(Exception):
     pass
 
 
+# Same limit and reason as dialogue_writer._LINES_PER_REQUEST (owner's
+# report, 2026-10-24: a 22-line reply came back shortened). Each shot's
+# prompts depend only on that shot, so a long screenplay is compiled in
+# independent batches.
+SHOTS_PER_REQUEST = 8
+
+
 class ShotPromptCompiler:
     def __init__(self, reasoning_client: AgentReasoningClient):
         self._reasoning_client = reasoning_client
@@ -92,6 +99,12 @@ class ShotPromptCompiler:
         missing = [s.line_index for s in shots if s.line_index not in lines]
         if not shots or missing:
             raise ShotPromptCompilerError(f"No shots to compile, or shots for unknown lines: {missing}")
+        compiled: list[CompiledShotPrompt] = []
+        for start in range(0, len(shots), SHOTS_PER_REQUEST):
+            compiled.extend(self._compile_batch(screenplay, shots[start:start + SHOTS_PER_REQUEST]))
+        return compiled
+
+    def _compile_batch(self, screenplay: DialogueScreenplay, shots: list[ShotPlan]) -> list[CompiledShotPrompt]:
         try:
             raw = self._reasoning_client.complete(_SYSTEM_PROMPT, self._user_prompt(screenplay, shots))
         except Exception as exc:

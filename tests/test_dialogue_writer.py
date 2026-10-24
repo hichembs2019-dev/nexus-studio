@@ -853,3 +853,56 @@ def test_write_complete_dialogue_screenplay_also_groups_real_scenes():
     assert len(screenplay.scenes) == 1
     assert screenplay.scenes[0].location == "a sunny garden"
     assert screenplay.scenes[0].characters_present == ["الرجل", "فوزية"]
+
+
+# --- Long screenplays are written in parts (owner's report, 2026-10-24:
+# "Reply returned 10 lines, needed 22") ---
+
+def _lines_reply(start: int, count: int, names=("حسين", "ليلى")) -> str:
+    return json.dumps([
+        {
+            "character": names[i % 2], "line": f"سطر {i}", "action": "looks at her", "scene": i // 6,
+            "location": f"room {i // 6}", "mood": "tense",
+        }
+        for i in range(start, start + count)
+    ])
+
+
+def test_a_22_line_screenplay_is_written_in_three_parts_of_8_8_6():
+    reasoning = MockAgentReasoningClient([
+        _cast_reply(("حسين", "male"), ("ليلى", "female")),
+        _lines_reply(0, 8), _lines_reply(8, 8), _lines_reply(16, 6),
+    ])
+
+    screenplay = DialogueWriterAgent(reasoning).write_dialogue_screenplay("T", "قصة طويلة", line_count=22)
+
+    assert [l.line for l in screenplay.lines] == [f"سطر {i}" for i in range(22)]
+    assert [l.index for l in screenplay.lines] == list(range(22))
+    assert [s.index for s in screenplay.scenes] == [0, 1, 2, 3]
+    part_calls = reasoning.calls[1:]
+    assert len(part_calls) == 3
+    assert "PART 1 OF 3" in part_calls[0][0] and "EXACTLY 8 array elements" in part_calls[0][0]
+    assert "PART 3 OF 3" in part_calls[2][0] and "EXACTLY 6 array elements" in part_calls[2][0]
+    # The first part sees only the premise; later parts also see what was already written.
+    assert part_calls[0][1] == "قصة طويلة"
+    assert '"سطر 7"' in part_calls[1][1] and '"سطر 8"' not in part_calls[1][1]
+    assert '"سطر 15"' in part_calls[2][1]
+
+
+def test_a_shortened_part_fails_with_which_part_was_short():
+    reasoning = MockAgentReasoningClient([
+        _cast_reply(("حسين", "male"), ("ليلى", "female")),
+        _lines_reply(0, 8), _lines_reply(8, 3),
+    ])
+
+    with pytest.raises(DialogueWriterError, match=r"Reply returned 3 lines, needed 8 \(part 2 of 3, lines 9-16 of 22\)"):
+        DialogueWriterAgent(reasoning).write_dialogue_screenplay("T", "قصة طويلة", line_count=22)
+
+
+def test_up_to_8_lines_is_still_one_request():
+    reasoning = MockAgentReasoningClient([_cast_reply(("حسين", "male"), ("ليلى", "female")), _lines_reply(0, 8)])
+
+    DialogueWriterAgent(reasoning).write_dialogue_screenplay("T", "قصة", line_count=8)
+
+    assert len(reasoning.calls) == 2
+    assert "PART" not in reasoning.calls[1][0]

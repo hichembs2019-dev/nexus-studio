@@ -145,3 +145,27 @@ def test_an_empty_screenplay_is_rejected_without_any_call():
     with pytest.raises(ShotDirectorError):
         ShotDirectorAgent(client).plan_shots(DialogueScreenplay(title="x", premise="y"))
     assert client.calls == []
+
+
+def test_a_long_screenplay_is_planned_in_parts_that_see_the_earlier_shots():
+    types = ["wide", "close_up", "medium", "over_the_shoulder"]
+    client = MockAgentReasoningClient([
+        _reply(*[_shot(i, types[i % 4]) for i in range(8)]),
+        _reply(*[_shot(i, types[i % 4]) for i in range(8, 10)]),
+    ])
+
+    shots = ShotDirectorAgent(client).plan_shots(_screenplay(10))
+
+    assert [s.line_index for s in shots] == list(range(10))
+    assert len(client.calls) == 2
+    assert "PART 2 OF 2" in client.calls[1][0] and "exactly 2 objects" in client.calls[1][0]
+    payload = json.loads(client.calls[1][1])
+    assert payload["plan_only_line_indices"] == [8, 9]
+    assert [s["line_index"] for s in payload["already_planned"]] == list(range(8))
+
+
+def test_a_shortened_part_names_the_part():
+    client = MockAgentReasoningClient([_reply(*[_shot(i, "wide" if i % 2 else "close_up") for i in range(5)])])
+
+    with pytest.raises(ShotDirectorError, match=r"part 1 of 2"):
+        ShotDirectorAgent(client).plan_shots(_screenplay(10))

@@ -60,6 +60,18 @@ class ShotDirectorError(Exception):
     pass
 
 
+# Same limit and reason as dialogue_writer._LINES_PER_REQUEST (owner's
+# report, 2026-10-24: a 22-line reply came back shortened). A longer
+# screenplay is planned in consecutive parts; every part sees the whole
+# screenplay and the shots already planned, so coverage still varies
+# across the boundary.
+LINES_PER_REQUEST = 8
+
+_PART_INSTRUCTION = """
+
+THIS REQUEST IS PART {part} OF {parts}. Plan shots ONLY for the lines whose index is listed in "plan_only_line_indices" in the user message - exactly {count} objects, in that order, nothing for any other line. "already_planned" holds the shots planned for earlier lines: continue the coverage from them (do not repeat the last shot type and angle back to back)."""
+
+
 class ShotDirectorAgent:
     def __init__(self, reasoning_client: AgentReasoningClient):
         self._reasoning_client = reasoning_client
@@ -67,15 +79,37 @@ class ShotDirectorAgent:
     def plan_shots(self, screenplay: DialogueScreenplay) -> list[ShotPlan]:
         if not screenplay.lines:
             raise ShotDirectorError("السيناريو لا يحتوي على أي سطر حوار لتخطيط لقطاته")
+        if len(screenplay.lines) <= LINES_PER_REQUEST:
+            items = self._ask(_SYSTEM_PROMPT, self._user_prompt(screenplay))
+            return self._validate(items, screenplay)
+
+        indices = [l.index for l in screenplay.lines]
+        parts = -(-len(indices) // LINES_PER_REQUEST)
+        items: list[dict] = []
+        for part in range(parts):
+            batch = indices[part * LINES_PER_REQUEST:(part + 1) * LINES_PER_REQUEST]
+            system_prompt = _SYSTEM_PROMPT + _PART_INSTRUCTION.format(part=part + 1, parts=parts, count=len(batch))
+            payload = json.loads(self._user_prompt(screenplay))
+            payload["plan_only_line_indices"] = batch
+            payload["already_planned"] = items
+            batch_items = self._ask(system_prompt, json.dumps(payload, ensure_ascii=False))
+            got = [item.get("line_index") for item in batch_items]
+            if got != batch:
+                raise ShotDirectorError(
+                    f"Director returned shots for lines {got}, needed exactly {batch} (part {part + 1} of {parts})"
+                )
+            items.extend(batch_items)
+        return self._validate(items, screenplay)
+
+    def _ask(self, system_prompt: str, user_prompt: str) -> list[dict]:
         try:
-            raw = self._reasoning_client.complete(_SYSTEM_PROMPT, self._user_prompt(screenplay))
+            raw = self._reasoning_client.complete(system_prompt, user_prompt)
         except Exception as exc:
             raise ShotDirectorError(
                 f"تعذّر الاتصال بالمخرج (Gemini) حالياً - حاول مرة أخرى بعد قليل. "
                 f"لم يُصرف أي مال حقيقي. السبب التقني: {exc}"
             ) from exc
-        items = parse_json_object_array(raw, _SHOT_FIELDS, error_cls=ShotDirectorError)
-        return self._validate(items, screenplay)
+        return parse_json_object_array(raw, _SHOT_FIELDS, error_cls=ShotDirectorError)
 
     @staticmethod
     def _user_prompt(screenplay: DialogueScreenplay) -> str:
