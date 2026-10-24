@@ -132,3 +132,21 @@ def test_a_shot_for_a_line_not_in_the_screenplay_is_rejected_without_any_call():
 def test_a_provider_failure_becomes_a_clean_arabic_error():
     with pytest.raises(ShotPromptCompilerError, match="تعذّر الاتصال بمحرّك الأوامر"):
         ShotPromptCompiler(_FailingClient()).compile(_screenplay(), _shots())
+
+
+def test_more_than_8_shots_are_compiled_in_batches():
+    screenplay = _screenplay()
+    screenplay.lines = [
+        DialogueLine(index=i, character="فوزية", line="الرز جاهز", action="lifts the pot lid") for i in range(10)
+    ]
+    shots = [
+        ShotPlan(i, "wide", "eye_level", "static", "warm window light", "steam rising", "down at the pot")
+        for i in range(10)
+    ]
+    client = MockAgentReasoningClient([_reply(*[_item(i) for i in range(8)]), _reply(*[_item(i) for i in range(8, 10)])])
+
+    compiled = ShotPromptCompiler(client).compile(screenplay, shots)
+
+    assert [c.line_index for c in compiled] == list(range(10))
+    assert len(client.calls) == 2
+    assert [s["line_index"] for s in json.loads(client.calls[1][1])] == [8, 9]

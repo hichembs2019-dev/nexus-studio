@@ -761,8 +761,11 @@ def test_handle_message_build_screenplay_falls_back_to_estimated_mode_with_no_qu
     router = _router_reply("build_screenplay", reply="جارٍ بناء سيناريو من فكرتك.")
     cast = _cast_reply(("فوزية", "female"))
     line_count = max(2, round(60.0 / ESTIMATED_SECONDS_PER_LINE))
-    lines = _lines_reply(*[("فوزية", f"سطر {i}", "") for i in range(line_count)])
-    conversation, _ = _conversation([router, cast, lines])
+    # 15 lines is more than one request carries (dialogue_writer's
+    # _LINES_PER_REQUEST = 8), so the writer asks in two parts: 8, then 7.
+    part_1 = _lines_reply(*[("فوزية", f"سطر {i}", "") for i in range(8)])
+    part_2 = _lines_reply(*[("فوزية", f"سطر {i}", "") for i in range(8, line_count)])
+    conversation, _ = _conversation([router, cast, part_1, part_2])
 
     reply = conversation.handle_message("chat1", "فكرة بلا أي كلام منقول حرفيًا عن امرأة وحيدة")
 

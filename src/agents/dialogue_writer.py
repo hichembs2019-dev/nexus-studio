@@ -175,6 +175,7 @@ _LINES_SYSTEM_PROMPT = """You are a screenwriter turning a premise and a fixed c
 Rules:
 - Output ONLY a JSON array of objects, nothing else - no markdown fences, no commentary.
 - The array must have EXACTLY {line_count} elements.
+- NEVER merge two lines into one, and NEVER summarize or skip a scene to make the reply shorter. The number of elements must match exactly what is asked - a shorter array is rejected and the whole request fails.
 - Each object has exactly these keys:
   - "character": one of these EXACT names (same spelling): {cast}
   - "line": what they actually SAY, in the SAME language as the premise, 1-2 short sentences a person would plausibly speak aloud - never a narrator's description of events. When the premise is in Arabic, every line you write (not a line copied verbatim from the premise) is correct, professional Modern Standard Arabic (العربية الفصحى) as spoken in a high-quality TV drama: grammatically correct, natural to say aloud, no dialect words mixed in, never a stiff word-for-word translation from English.
@@ -194,6 +195,7 @@ _COMPLETE_LINES_SYSTEM_PROMPT = """You are transcribing a real story's own quote
 Rules:
 - Output ONLY a JSON array of objects, nothing else - no markdown fences, no commentary.
 - The premise contains exactly {line_count} directly quoted dialogue moments (text inside «guillemets» or "quotes"). Output EXACTLY {line_count} array elements, one per quoted moment, IN THE SAME ORDER they appear in the premise. Do not skip any, do not merge two into one, do not add a line that is not one of the premise's own quoted moments.
+- NEVER merge two quoted moments into one element, and NEVER summarize or skip a scene to make the reply shorter. A shorter array is rejected and the whole request fails.
 - Each object has exactly these keys:
   - "character": one of these EXACT names (same spelling): {cast}
   - "line": the quoted text for that moment, copied EXACTLY as written in the premise - not a single word paraphrased, shortened, or altered.
@@ -260,6 +262,18 @@ _QUOTED_MOMENT_PATTERN = re.compile(r"«[^»]+»|\"[^\"]+\"|“[^”]+”")
 # genuinely participating ones is not rejected for a plausible,
 # legitimate imbalance.
 _MAX_SINGLE_CHARACTER_LINE_SHARE = 0.7
+
+# Owner's real report, 2026-10-24: "Reply returned 10 lines, needed 22" -
+# asked for 22 lines in one reply, the model returned a shortened array.
+# A screenplay longer than this is written in consecutive parts of at most
+# this many lines, each its own request that sees the lines already
+# written, so no single reply has to carry a long JSON array.
+_LINES_PER_REQUEST = 8
+
+_PART_INSTRUCTION = """
+
+THIS REQUEST IS PART {part} OF {parts}. The complete screenplay has {total} elements as described above, but this reply must contain ONLY elements {first} to {last} - EXACTLY {count} array elements, nothing before or after them.
+The elements already written (1 to {done}) are given in the user message as JSON. Continue the same story directly from the last of them: do not repeat or rewrite them, keep every character name spelled exactly the same, and keep the "scene" numbering consistent (the last written element is in scene {last_scene}; stay in it or move to {next_scene})."""
 
 # Owner's standing instruction, 2026-10-21: no narrator, ever, unless the
 # owner explicitly asks for one - a code-level gate, not a prompt request
@@ -448,13 +462,7 @@ class DialogueWriterAgent:
         cast_names = [c["name"] for c in cast]
 
         lines_system_prompt = lines_system_prompt_template.format(line_count=line_count, cast=", ".join(cast_names))
-        lines_raw = self._complete(lines_system_prompt, premise)
-        parsed_lines = parse_json_object_array(
-            lines_raw, ("character", "line", "action", "scene", "location", "mood"), error_cls=DialogueWriterError
-        )
-        if len(parsed_lines) < line_count:
-            raise DialogueWriterError(f"Reply returned {len(parsed_lines)} lines, needed {line_count}: {lines_raw!r}")
-        parsed_lines = parsed_lines[:line_count]
+        parsed_lines, lines_raw = self._write_lines(lines_system_prompt, premise, line_count)
 
         for item in parsed_lines:
             if item["character"] not in cast_names:
@@ -520,6 +528,47 @@ class DialogueWriterAgent:
         return DialogueScreenplay(
             title=title, premise=premise, characters=characters, lines=dialogue_lines, scenes=scenes
         )
+
+    def _write_lines(self, lines_system_prompt: str, premise: str, line_count: int) -> tuple[list[dict], str]:
+        """Returns (parsed_lines, raw_replies_joined). Up to
+        _LINES_PER_REQUEST lines: one request, exactly as before. Longer:
+        consecutive parts (see _PART_INSTRUCTION), each validated for its
+        own exact count before the next part is asked for."""
+        keys = ("character", "line", "action", "scene", "location", "mood")
+        if line_count <= _LINES_PER_REQUEST:
+            raw = self._complete(lines_system_prompt, premise)
+            parsed = parse_json_object_array(raw, keys, error_cls=DialogueWriterError)
+            if len(parsed) < line_count:
+                raise DialogueWriterError(f"Reply returned {len(parsed)} lines, needed {line_count}: {raw!r}")
+            return parsed[:line_count], raw
+
+        parts = -(-line_count // _LINES_PER_REQUEST)
+        written: list[dict] = []
+        raws: list[str] = []
+        for part in range(parts):
+            first = part * _LINES_PER_REQUEST
+            count = min(_LINES_PER_REQUEST, line_count - first)
+            last_scene = written[-1].get("scene") if written else 0
+            next_scene = last_scene + 1 if isinstance(last_scene, int) else 1
+            system_prompt = lines_system_prompt + _PART_INSTRUCTION.format(
+                part=part + 1, parts=parts, total=line_count, first=first + 1, last=first + count,
+                count=count, done=first, last_scene=last_scene, next_scene=next_scene,
+            )
+            user_prompt = premise
+            if written:
+                user_prompt += (
+                    f"\n\n[Elements 1 to {first} already written]\n" + json.dumps(written, ensure_ascii=False)
+                )
+            raw = self._complete(system_prompt, user_prompt)
+            raws.append(raw)
+            parsed = parse_json_object_array(raw, keys, error_cls=DialogueWriterError)
+            if len(parsed) < count:
+                raise DialogueWriterError(
+                    f"Reply returned {len(parsed)} lines, needed {count} (part {part + 1} of {parts}, "
+                    f"lines {first + 1}-{first + count} of {line_count}): {raw!r}"
+                )
+            written.extend(parsed[:count])
+        return written, "\n".join(raws)
 
     @staticmethod
     def _build_scenes(parsed_lines: list[dict]) -> list[DialogueSceneInfo]:
