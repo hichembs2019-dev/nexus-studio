@@ -40,7 +40,7 @@ pod's own real hourly rate - divided into real dollars-per-GPU-second,
 and applied to the output clip's own duration as an explicitly
 conservative PROXY: a real Wan 2.2 S2V sampling run always takes at
 least as long as the clip it produces (loading the model, encoding the
-reference photo and audio, 4 real sampling steps, decoding, muxing), so
+reference photo and audio, 20 sampling steps at cfg 6, decoding, muxing), so
 this measure understates the real wall-clock GPU time nearly every real
 call actually uses - the same safety-margin posture already used for
 Replicate's own PROVISIONAL_PRICE_PER_SECOND_USD. Refining this into a
@@ -112,7 +112,12 @@ class SelfHostedS2VVideoClient(ReplicateVideoClient):
         pod_id: str,
         *,
         comfyui_client_factory: Callable[[str], ComfyUIS2VClient] = RealComfyUIS2VClient,
-        timeout_seconds: float = 1800,
+        # Raised from 1800 when production moved to the 20-step, cfg-6
+        # path (owner's decision, 2026-10-24): 5x the steps, and cfg > 1
+        # adds a second model pass per step. The real per-clip time on
+        # this pod has not been measured yet, so the old limit could
+        # abandon a clip that was still rendering.
+        timeout_seconds: float = 7200,
         poll_interval_seconds: float = 5,
         # 640x640 is the size the real S2V proof ran at (docs/SOURCES.md).
         # The cinematic shot path (app.py) asks for 832x480 instead - the
