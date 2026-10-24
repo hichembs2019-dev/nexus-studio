@@ -70,9 +70,11 @@ You receive JSON: a list of shots, each with the speaking character (gender, app
 Reply with ONLY a JSON array, one object per shot, in the same order, each with exactly these keys:
   - "line_index": copied exactly.
   - "image_prompt": one English sentence describing the still frame: the character (from gender and appearance), what they are doing (from action), and the real location around them with concrete set details. Photorealistic film still.
-  - "video_prompt": one English sentence describing the motion in this shot: the character's body movement and expression while speaking, and how the scene around them is alive.
+  - "video_prompt": one or two English sentences describing the motion in this shot: the character's body movement and facial expression while speaking, and how the scene around them is alive.
 
 Rules:
+  - This is an emotional drama: the face must ACT. Read the action and the scene mood and name the emotion's visible physical signs in BOTH prompts, strongly and concretely - for grief: tears streaming down the face, red wet eyes, trembling lips, a face crumpling while weeping, shoulders shaking with sobs; for anger: clenched jaw, flared nostrils, tense neck; for fear: wide eyes, shallow breath. Never a neutral or calm face unless the mood really is calm.
+  - Prefer emotion carried by the face, hands and upper body. If the action involves walking, describe it as slow, heavy, natural steps.
   - English only. Never include the dialogue, any Arabic, quotation marks or on-screen text.
   - The character never looks at the camera, lens or viewer.
   - Do not mention shot type, camera angle or camera movement - they are added separately.
@@ -81,6 +83,15 @@ Rules:
 
 class ShotPromptCompilerError(Exception):
     pass
+
+
+# Owner's report, 2026-10-24: a character in a hospital scene moved with
+# "distorted, strange" legs. Added by code to every video prompt, never
+# left to the compiler model to remember.
+MOTION_QUALITY_CLAUSE = (
+    "Natural, anatomically correct body movement, realistic weight and footsteps, "
+    "no distortion, no extra limbs, strong visible facial emotion."
+)
 
 
 # Same limit and reason as dialogue_writer._LINES_PER_REQUEST (owner's
@@ -133,7 +144,8 @@ class ShotPromptCompiler:
                     ),
                     video_prompt=(
                         f"{CAMERA_MOVEMENT_PHRASES[shot.camera_movement]}, {video_body} "
-                        f"In the background: {shot.environment_motion}. The character looks {shot.gaze}."
+                        f"In the background: {shot.environment_motion}. The character looks {shot.gaze}. "
+                        f"{MOTION_QUALITY_CLAUSE}"
                     ),
                 )
             )
