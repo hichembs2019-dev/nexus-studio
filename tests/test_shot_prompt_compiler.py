@@ -150,3 +150,14 @@ def test_more_than_8_shots_are_compiled_in_batches():
     assert [c.line_index for c in compiled] == list(range(10))
     assert len(client.calls) == 2
     assert [s["line_index"] for s in json.loads(client.calls[1][1])] == [8, 9]
+
+
+def test_every_video_prompt_ends_with_the_motion_quality_clause():
+    from src.workflows.shot_prompt_compiler import MOTION_QUALITY_CLAUSE
+
+    client = MockAgentReasoningClient([_reply(_item(0), _item(1))])
+
+    compiled = ShotPromptCompiler(client).compile(_screenplay(), _shots())
+
+    assert all(c.video_prompt.endswith(MOTION_QUALITY_CLAUSE) for c in compiled)
+    assert "tears streaming down the face" in client.calls[0][0]

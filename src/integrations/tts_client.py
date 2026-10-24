@@ -17,6 +17,7 @@ resource 2026-10-17 (see docs/SOURCES.md "Azure TTS voiceover"):
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from xml.sax.saxutils import escape
 
 DEFAULT_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3"
@@ -26,11 +27,28 @@ class TTSError(Exception):
     pass
 
 
+# Owner's report, 2026-10-24: the voices read "like a book", with no
+# grief. Checked on Microsoft's own voice table (learn.microsoft.com,
+# speech-service/language-support, read 2026-10-24): every ar-* voice,
+# ar-TN-ReemNeural and ar-TN-HediNeural included, has an EMPTY
+# Style/Roles column - <mstts:express-as style="sad"> or crying is not
+# available for them. Standard SSML <prosody> (rate, pitch) works for
+# every neural voice, so a grieving line is read slower and lower.
+@dataclass(frozen=True)
+class Prosody:
+    rate: str
+    pitch: str
+
+
+GRIEF_PROSODY = Prosody(rate="-15%", pitch="-8%")
+
+
 class TTSClient(ABC):
     @abstractmethod
-    def synthesize(self, text: str, voice: str, *, lang: str) -> bytes:
+    def synthesize(self, text: str, voice: str, *, lang: str, prosody: Prosody | None = None) -> bytes:
         """Returns real MP3 bytes for `text` read by `voice` (e.g.
-        ar-TN-HediNeural). Raises TTSError on a non-200 response."""
+        ar-TN-HediNeural), wrapped in <prosody> when given. Raises
+        TTSError on a non-200 response."""
 
 
 class RealAzureTTSClient(TTSClient):
@@ -38,12 +56,15 @@ class RealAzureTTSClient(TTSClient):
         self._subscription_key = subscription_key
         self._base_url = f"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1"
 
-    def synthesize(self, text: str, voice: str, *, lang: str) -> bytes:
+    def synthesize(self, text: str, voice: str, *, lang: str, prosody: Prosody | None = None) -> bytes:
         import httpx
 
+        spoken = escape(text)
+        if prosody is not None:
+            spoken = f"<prosody rate='{prosody.rate}' pitch='{prosody.pitch}'>{spoken}</prosody>"
         ssml = (
             f"<speak version='1.0' xml:lang='{lang}'>"
-            f"<voice name='{voice}'>{escape(text)}</voice>"
+            f"<voice name='{voice}'>{spoken}</voice>"
             f"</speak>"
         )
         response = httpx.post(
@@ -69,7 +90,9 @@ class MockTTSClient(TTSClient):
     def __init__(self, scripted_bytes: bytes = b"fake-mp3-bytes"):
         self._scripted_bytes = scripted_bytes
         self.calls: list[tuple[str, str, str]] = []
+        self.prosodies: list[Prosody | None] = []
 
-    def synthesize(self, text: str, voice: str, *, lang: str) -> bytes:
+    def synthesize(self, text: str, voice: str, *, lang: str, prosody: Prosody | None = None) -> bytes:
         self.calls.append((text, voice, lang))
+        self.prosodies.append(prosody)
         return self._scripted_bytes

@@ -42,7 +42,7 @@ from src.integrations.replicate_image_client import (
     flux2_dev_cost_usd,
 )
 from src.integrations.replicate_video_client import PROVISIONAL_PRICE_PER_SECOND_USD, ReplicateVideoClient
-from src.integrations.tts_client import TTSClient
+from src.integrations.tts_client import GRIEF_PROSODY, Prosody, TTSClient
 from src.models import (
     Character,
     CompiledShotPrompt,
@@ -117,6 +117,22 @@ _GENDER_NOUN = {"male": "a man", "female": "a woman"}
 
 class DialoguePipelineError(Exception):
     pass
+
+
+# Matched against the line's scene mood and its English stage action
+# (both written by the dialogue writer) - the only emotion signal a line
+# carries. See tts_client.GRIEF_PROSODY for why this is prosody and not
+# a crying style.
+_GRIEF_WORDS = (
+    "sad", "grief", "griev", "heartbr", "sorrow", "mourn", "despair", "devastat", "tear",
+    "cry", "crie", "weep", "sob", "regret", "anguish", "agony", "remorse", "broken",
+)
+
+
+def _line_prosody(screenplay: DialogueScreenplay, line: DialogueLine) -> Prosody | None:
+    mood = next((s.mood for s in screenplay.scenes if s.index == line.scene), "")
+    text = f"{mood} {line.action}".lower()
+    return GRIEF_PROSODY if any(word in text for word in _GRIEF_WORDS) else None
 
 
 def _character_seed(slug: str, character_name: str) -> int:
@@ -469,8 +485,13 @@ class DialoguePipeline:
                     continue
                 billed = False
                 try:
-                    audio_a = self._tts.synthesize(line.line, character.voice, lang=self._tts_lang)
-                    audio_b = self._tts.synthesize(next_line.line, next_character.voice, lang=self._tts_lang)
+                    audio_a = self._tts.synthesize(
+                        line.line, character.voice, lang=self._tts_lang, prosody=_line_prosody(screenplay, line)
+                    )
+                    audio_b = self._tts.synthesize(
+                        next_line.line, next_character.voice, lang=self._tts_lang,
+                        prosody=_line_prosody(screenplay, next_line),
+                    )
                     ref_path, mask_a_path, mask_b_path = self._build_two_speaker_reference(
                         photo_path, next_photo_path, slug,
                         _slug(character.name, default="character"), _slug(next_character.name, default="character"),
@@ -567,7 +588,9 @@ class DialoguePipeline:
             shot_billed = False
             try:
                 prefix = f"{slug}_line{line.index:03d}"
-                audio_bytes = self._tts.synthesize(line.line, character.voice, lang=self._tts_lang)
+                audio_bytes = self._tts.synthesize(
+                    line.line, character.voice, lang=self._tts_lang, prosody=_line_prosody(screenplay, line)
+                )
                 audio_path = os.path.join(self._output_dir, f"{prefix}.mp3")
                 with open(audio_path, "wb") as f:
                     f.write(audio_bytes)

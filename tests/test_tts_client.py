@@ -78,3 +78,21 @@ def test_mock_tts_client_records_calls_and_returns_scripted_bytes():
 
     assert data == b"scripted-audio"
     assert mock.calls == [("hello", "ar-TN-ReemNeural", "ar-TN")]
+
+
+def test_synthesize_wraps_the_text_in_prosody_when_given(monkeypatch):
+    from src.integrations.tts_client import GRIEF_PROSODY
+
+    captured = {}
+
+    def fake_post(url, *, content, headers, timeout):
+        captured["content"] = content
+        return _FakeResponse(status_code=200, content=b"mp3")
+
+    import httpx
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    RealAzureTTSClient("k", "eastus").synthesize("سامحيني", "ar-TN-HediNeural", lang="ar-TN", prosody=GRIEF_PROSODY)
+
+    assert "<voice name='ar-TN-HediNeural'><prosody rate='-15%' pitch='-8%'>سامحيني</prosody></voice>" in captured["content"].decode("utf-8")

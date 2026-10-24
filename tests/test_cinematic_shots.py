@@ -331,3 +331,17 @@ def test_the_pre_approve_estimate_adds_one_shot_still_per_spoken_line():
 
     assert "$0.00" in estimate(0.0)
     assert "$3.00" in estimate(1.0)  # 3 spoken lines x $1.00
+
+
+def test_a_grieving_scene_is_read_slower_and_lower_and_a_calm_one_is_not(tmp_path):
+    from src.integrations.tts_client import GRIEF_PROSODY
+    from src.workflows.dialogue_pipeline import _line_prosody
+
+    screenplay = _screenplay(2)
+    screenplay.scenes = [DialogueSceneInfo(index=0, location="hospital room", mood="devastated, quietly heartbroken")]
+    assert _line_prosody(screenplay, screenplay.lines[0]) == GRIEF_PROSODY
+
+    screenplay.scenes = [DialogueSceneInfo(index=0, location="old kitchen", mood="warm")]
+    screenplay.lines[1].action = "weeping, hands over her face"
+    assert _line_prosody(screenplay, screenplay.lines[0]) is None
+    assert _line_prosody(screenplay, screenplay.lines[1]) == GRIEF_PROSODY
