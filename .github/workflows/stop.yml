@@ -1,0 +1,32 @@
+name: Stop bot on droplet
+
+# Owner's instruction, 2026-10-24 ("اوقفه"): stop the bot so no further
+# money can be spent. Run by hand; deploy.yml starts it again.
+on:
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-droplet
+  cancel-in-progress: false
+
+jobs:
+  stop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Stop over SSH
+        uses: appleboy/ssh-action@v1.2.4
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/nexus-studio
+            docker compose stop nexus-studio
+            echo "=== container state after stop ==="
+            docker compose ps -a nexus-studio
+            if docker compose ps --status running --services | grep -qx nexus-studio; then
+              echo "STILL RUNNING"
+              exit 1
+            fi
+            echo "STOPPED: nexus-studio is not running"
