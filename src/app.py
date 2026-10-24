@@ -91,6 +91,21 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
             logger.warning("Neither GROQ_API_KEY nor GEMINI_API_KEY set - using MockAgentReasoningClient")
         reasoning = MockAgentReasoningClient()
 
+    # Owner's instruction, 2026-10-24: Gemini writes the screenplay from
+    # the owner's idea (Groq only as its fallback); Groq stays the
+    # primary for the shot prompt compiler (`reasoning` above).
+    writer_reasoning: AgentReasoningClient = reasoning
+    if not force_mocks and settings.gemini_configured:
+        writer_reasoning = RealGeminiReasoningClient(
+            settings.gemini_api_key,
+            settings.gemini_model,
+            fallback=(
+                RealGroqReasoningClient(settings.groq_api_key, settings.groq_model)
+                if settings.groq_configured
+                else None
+            ),
+        )
+
     tts: TTSClient | None
     if not force_mocks and settings.azure_speech_configured:
         tts = RealAzureTTSClient(settings.azure_speech_key, settings.azure_speech_region)
@@ -193,7 +208,7 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
         )
         if multitalk_client is not None:
             logger.info("Real two-speaker MultiTalk pairing: ENABLED (Runpod pod %s)", settings.runpod_s2v_pod_id)
-        dialogue_writer = DialogueWriterAgent(reasoning)
+        dialogue_writer = DialogueWriterAgent(writer_reasoning)
         dialogue_pipeline = DialoguePipeline(
             video_client, tts, settings.output_dir,
             tts_lang=settings.azure_tts_lang,
@@ -209,7 +224,7 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
         image_client = RealReplicateImageClient(settings.replicate_api_token)
         logger.info("Real video provider: Replicate (wan-video/wan-2.2-s2v)")
         logger.info("Real image provider: Replicate (black-forest-labs/flux-dev)")
-        dialogue_writer = DialogueWriterAgent(reasoning)
+        dialogue_writer = DialogueWriterAgent(writer_reasoning)
         dialogue_pipeline = DialoguePipeline(
             video_client, tts, settings.output_dir,
             tts_lang=settings.azure_tts_lang,
@@ -221,7 +236,7 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
         )
     elif force_mocks:
         video_client = MockReplicateVideoClient()
-        dialogue_writer = DialogueWriterAgent(reasoning)
+        dialogue_writer = DialogueWriterAgent(writer_reasoning)
         dialogue_pipeline = DialoguePipeline(
             video_client, tts or MockTTSClient(), settings.output_dir,
             tts_lang=settings.azure_tts_lang,

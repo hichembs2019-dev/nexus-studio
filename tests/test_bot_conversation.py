@@ -713,11 +713,31 @@ def _router_reply(intent, reply="رد", edits=None, caption_lines=None):
     return json.dumps({"intent": intent, "reply": reply, "edits": edits or [], "caption_lines": caption_lines or []})
 
 
-def test_handle_message_accumulate_stores_the_text_and_replies_conversationally():
+def test_with_no_draft_a_one_line_idea_becomes_a_screenplay_right_away():
+    # Owner's instruction, 2026-10-24: an idea alone must produce the
+    # film's screenplay - never a "got it, continue" that waits for more.
     router = _router_reply("accumulate", reply="تم، أكمل.")
-    conversation, _ = _conversation([router])
+    cast = _cast_reply(("حسين", "male"), ("فاطمة", "female"))
+    pairs = [("حسين", "سامحيني", "weeping"), ("فاطمة", "فات الأوان", "turns away")]
+    part_1 = _lines_reply(*(pairs * 4))  # 15 lines (60s default) are written as 8 + 7
+    part_2 = _lines_reply(*(pairs * 4)[:7])
+    conversation, _ = _conversation([router, cast, part_1, part_2])
 
-    reply = conversation.handle_message("chat1", "كان يا ما كان رجل وحيد")
+    reply = conversation.handle_message("chat1", "أب نادم يعود إلى ابنته بعد عشرين سنة")
+
+    assert "سامحيني" in reply.text and "فات الأوان" in reply.text
+    assert reply.buttons == [("✅ موافقة", "approve"), ("❌ إلغاء", "cancel")]
+
+
+def test_with_a_draft_accumulate_still_only_stores_the_text():
+    router_build = _router_reply("build_screenplay", reply="بُني.")
+    router_accumulate = _router_reply("accumulate", reply="تم، أكمل.")
+    cast = _cast_reply(("فوزية", "female"))
+    lines = _lines_reply(("فوزية", "مرحبا", "smiling"))
+    conversation, _ = _conversation([router_build, cast, lines, router_accumulate])
+    conversation.handle_message("chat1", 'فوزية قالت: «مرحبا»')
+
+    reply = conversation.handle_message("chat1", "وكان المطر يهطل في الخارج")
 
     assert reply.text == "تم، أكمل."
     assert reply.buttons is None
@@ -773,13 +793,12 @@ def test_handle_message_build_screenplay_falls_back_to_estimated_mode_with_no_qu
 
 
 def test_handle_message_build_screenplay_uses_previously_accumulated_text_too():
-    router_accumulate = _router_reply("accumulate", reply="تم.")
     router_build = _router_reply("build_screenplay", reply="جارٍ البناء.")
     cast = _cast_reply(("فوزية", "female"))
     lines = _lines_reply(("فوزية", "مرحبا", "smiling"))
-    conversation, _ = _conversation([router_accumulate, router_build, cast, lines])
+    conversation, _ = _conversation([router_build, cast, lines])
 
-    conversation.handle_message("chat1", 'فوزية قالت: «مرحبا»')
+    conversation.handle_plain_text("chat1", 'فوزية قالت: «مرحبا»')
     reply = conversation.handle_message("chat1", "جاهز، ابن السيناريو الآن")
 
     assert "مرحبا" in reply.text
@@ -856,7 +875,7 @@ def test_handle_message_with_empty_text_routes_the_accumulated_pending_text_inst
     # with an empty string once the owner has gone quiet, so the FULL
     # coalesced story (not a mid-sentence fragment) must be what actually
     # gets routed through the LLM.
-    router = _router_reply("accumulate", reply="تم.")
+    router = _router_reply("discuss", reply="تم.")
     reasoning = MockAgentReasoningClient(scripted_replies=[router])
     conversation = BotConversation(DialogueWriterAgent(reasoning), PublishingAgent({}))
     conversation.handle_plain_text("chat1", "جزء أول من القصة")
@@ -890,8 +909,8 @@ def test_handle_message_with_empty_text_and_nothing_pending_does_nothing():
 
 def test_handle_message_discuss_preserves_pending_text_pulled_from_debounce():
     router_discuss = _router_reply("discuss", reply="سؤال جيد.")
-    router_accumulate = _router_reply("accumulate", reply="تم.")
-    reasoning = MockAgentReasoningClient(scripted_replies=[router_discuss, router_accumulate])
+    router_second = _router_reply("discuss", reply="تم.")
+    reasoning = MockAgentReasoningClient(scripted_replies=[router_discuss, router_second])
     conversation = BotConversation(DialogueWriterAgent(reasoning), PublishingAgent({}))
     conversation.handle_plain_text("chat1", "جزء من قصة حقيقية لم تتحول لسيناريو بعد")
 

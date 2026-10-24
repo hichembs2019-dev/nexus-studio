@@ -52,6 +52,10 @@ class ComfyUIS2VClient(ABC):
     def download_output(self, filename: str, subfolder: str, type_: str) -> bytes:
         """Streams the real file bytes via /view."""
 
+    def cancel(self, prompt_id: str) -> None:
+        """Removes `prompt_id` from the pod's queue and interrupts the
+        running prompt, so an abandoned clip stops using the paid GPU."""
+
 
 class RealComfyUIS2VClient(ComfyUIS2VClient):
     def __init__(self, base_url: str):
@@ -111,6 +115,24 @@ class RealComfyUIS2VClient(ComfyUIS2VClient):
         response.raise_for_status()
         return response.content
 
+    def cancel(self, prompt_id: str) -> None:
+        import httpx
+
+        httpx.post(f"{self._base_url}/queue", json={"delete": [prompt_id]}, timeout=30).raise_for_status()
+        httpx.post(f"{self._base_url}/interrupt", timeout=30).raise_for_status()
+
+
+def clear_comfyui_queue(base_url: str) -> None:
+    """Empties ComfyUI's pending queue and interrupts the running prompt.
+    Owner's report, 2026-10-24: work submitted by an earlier bot process
+    kept the GPU busy for hours after that process was gone - nothing
+    was left to collect its output."""
+    import httpx
+
+    base_url = base_url.rstrip("/")
+    httpx.post(f"{base_url}/queue", json={"clear": True}, timeout=30).raise_for_status()
+    httpx.post(f"{base_url}/interrupt", timeout=30).raise_for_status()
+
 
 class MockComfyUIS2VClient(ComfyUIS2VClient):
     """Scripted outputs, one per submit() call, in order - lets a test
@@ -121,6 +143,7 @@ class MockComfyUIS2VClient(ComfyUIS2VClient):
         self._scripted_bytes = scripted_bytes
         self.uploaded_files: list[tuple[str, bytes, str]] = []
         self.submitted_prompts: list[dict] = []
+        self.cancelled: list[str] = []
         self._next_id = 0
         self._next_upload_name = 0
 
@@ -141,3 +164,6 @@ class MockComfyUIS2VClient(ComfyUIS2VClient):
 
     def download_output(self, filename: str, subfolder: str, type_: str) -> bytes:
         return self._scripted_bytes
+
+    def cancel(self, prompt_id: str) -> None:
+        self.cancelled.append(prompt_id)

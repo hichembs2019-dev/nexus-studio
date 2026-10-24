@@ -129,3 +129,13 @@ def test_build_app_never_enables_multitalk_without_a_real_self_hosted_pod():
     app = build_app(_settings(replicate_api_token="r8_real", runpod_api_key="", runpod_s2v_pod_id="", multitalk_enabled=True))
 
     assert app.dialogue_pipeline is None or app.dialogue_pipeline._multitalk_client is None
+
+
+def test_gemini_writes_the_screenplay_with_groq_as_its_fallback():
+    from src.integrations.reasoning_client import RealGeminiReasoningClient, RealGroqReasoningClient
+
+    app = build_app(_settings(replicate_api_token="r8_real", groq_api_key="gsk", gemini_api_key="gem"))
+
+    writer_client = app.conversation._dialogue_writer._reasoning_client
+    assert isinstance(writer_client, RealGeminiReasoningClient)
+    assert isinstance(writer_client._fallback, RealGroqReasoningClient)

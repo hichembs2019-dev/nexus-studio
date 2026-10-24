@@ -52,12 +52,19 @@ from __future__ import annotations
 import base64
 import random
 import subprocess
+import logging
 import tempfile
+import time
 from typing import Callable
 
-from src.integrations.comfyui_s2v_client import ComfyUIS2VClient, RealComfyUIS2VClient
+from src.integrations.comfyui_s2v_client import ComfyUIS2VClient, RealComfyUIS2VClient, clear_comfyui_queue
 from src.integrations.replicate_video_client import ReplicateVideoClient, ReplicateVideoError
-from src.integrations.runpod_client import RunpodClient, ensure_pod_ready
+from src.integrations.runpod_client import (
+    RunpodClient,
+    _default_state_path,
+    _load_current_pod_id,
+    ensure_pod_ready,
+)
 from src.workflows.wan_s2v_prompt_builder import build_s2v_prompt
 
 # Real, live-read rate for pod `wt5ennaph7w5nh` (Runpod MCP list-pods,
@@ -74,6 +81,8 @@ DEFAULT_HOURLY_RATE_USD = 0.59
 # the media actually being video, confirmed live against the real S2V
 # run's own /history response during the proof.
 OUTPUT_NODE_ID = "58"
+
+_log = logging.getLogger(__name__)
 
 
 class SelfHostedS2VError(ReplicateVideoError):
@@ -133,6 +142,18 @@ class SelfHostedS2VVideoClient(ReplicateVideoClient):
         self._comfyui_client_factory = comfyui_client_factory
         self._timeout_seconds = timeout_seconds
         self._poll_interval_seconds = poll_interval_seconds
+        self._last_render_seconds: float | None = None
+        self._clock = time.monotonic
+
+    def billed_seconds(self, clip_duration_seconds: float) -> float:
+        # Owner's instruction, 2026-10-24: show the real RunPod cost. The
+        # pod is paid per second it runs, so the real GPU time of a clip
+        # is how long ComfyUI took to render it, not the clip's length.
+        # Still a lower bound: pod start-up and idle time before the
+        # watchdog stops it are not counted.
+        if self._last_render_seconds is None:
+            return clip_duration_seconds
+        return self._last_render_seconds
 
     def generate_speech_to_video(
         self, *, prompt: str, image_data_uri: str, audio_data_uri: str, resolution: str = "480p"
@@ -156,10 +177,22 @@ class SelfHostedS2VVideoClient(ReplicateVideoClient):
             width=self._width,
             height=self._height,
         )
+        self._last_render_seconds = None
+        started = self._clock()
         prompt_id = comfy.submit(prompt_body)
-        outputs = comfy.wait_for_completion(
-            prompt_id, timeout_seconds=self._timeout_seconds, poll_interval_seconds=self._poll_interval_seconds
-        )
+        try:
+            outputs = comfy.wait_for_completion(
+                prompt_id, timeout_seconds=self._timeout_seconds, poll_interval_seconds=self._poll_interval_seconds
+            )
+        except Exception:
+            # A clip given up on (timeout, failed poll) must not keep the
+            # paid GPU busy and hold every later line behind it in the queue.
+            try:
+                comfy.cancel(prompt_id)
+            except Exception as cancel_exc:
+                _log.error("could not cancel abandoned ComfyUI prompt %s: %s", prompt_id, cancel_exc)
+            raise
+        self._last_render_seconds = self._clock() - started
         try:
             video_info = outputs[OUTPUT_NODE_ID]["images"][0]
         except (KeyError, IndexError, TypeError) as exc:
@@ -168,3 +201,15 @@ class SelfHostedS2VVideoClient(ReplicateVideoClient):
         return comfy.download_output(
             video_info["filename"], video_info.get("subfolder", ""), video_info.get("type", "output")
         )
+
+
+def clear_abandoned_comfyui_work(runpod_client: RunpodClient, configured_pod_id: str) -> str:
+    """Called once when the bot starts. Any prompt still queued or running
+    on the pod belongs to an earlier bot process that no longer exists,
+    so it is cleared. Never starts a stopped pod. Returns what it did."""
+    pod_id = _load_current_pod_id(_default_state_path(), configured_pod_id)
+    status = runpod_client.get_pod_status(pod_id).get("status")
+    if status != "RUNNING":
+        return f"pod {pod_id} is {status} - nothing to clear"
+    clear_comfyui_queue(f"https://{pod_id}-8188.proxy.runpod.net")
+    return f"pod {pod_id} is RUNNING - ComfyUI queue cleared and running prompt interrupted"
