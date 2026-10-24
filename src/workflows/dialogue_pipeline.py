@@ -27,6 +27,7 @@ drama look rather than a flat, undirected default.
 from __future__ import annotations
 
 import base64
+import hashlib
 import mimetypes
 import os
 import subprocess
@@ -116,6 +117,18 @@ _GENDER_NOUN = {"male": "a man", "female": "a woman"}
 
 class DialoguePipelineError(Exception):
     pass
+
+
+def _character_seed(slug: str, character_name: str) -> int:
+    """One fixed seed per (screenplay, character), sent to both flux-dev
+    (the portrait) and flux-2-dev (every shot still where this character
+    speaks). Owner's instruction, 2026-10-24: the same seed for every shot
+    of the same character. Derived from a hash rather than random so a
+    retry of the same screenplay reuses it. A seed only makes one
+    prediction reproducible - the portrait passed as `input_images` is
+    still what carries the face from shot to shot."""
+    digest = hashlib.sha256(f"{slug}|{character_name}".encode("utf-8")).digest()
+    return int.from_bytes(digest[:4], "big") & 0x7FFFFFFF
 
 
 def _slug(text: str, default: str = "episode") -> str:
@@ -707,7 +720,9 @@ class DialoguePipeline:
             with open(path, "rb") as f:
                 references.append((f.read(), mimetypes.guess_type(path)[0] or "image/jpeg"))
 
-        image_bytes = self._shot_image_client.generate_shot_image(compiled_prompt.image_prompt, references)
+        image_bytes = self._shot_image_client.generate_shot_image(
+            compiled_prompt.image_prompt, references, seed=_character_seed(_slug(screenplay.title), line.character)
+        )
         shots_dir = os.path.join(self._output_dir, "shots")
         os.makedirs(shots_dir, exist_ok=True)
         shot_path = os.path.join(shots_dir, f"{prefix}.jpg")
@@ -762,7 +777,7 @@ class DialoguePipeline:
                 f"photorealistic portrait photo of {gender_noun}, {character.appearance}, in a scene from this "
                 f"real story: {scene_context}"
             ) + PORTRAIT_STYLE_SUFFIX
-            image_bytes = self._image_client.generate_image(prompt)
+            image_bytes = self._image_client.generate_image(prompt, seed=_character_seed(slug, character.name))
             with open(cache_path, "wb") as f:
                 f.write(image_bytes)
             return cache_path, self._price_per_image_usd, None
