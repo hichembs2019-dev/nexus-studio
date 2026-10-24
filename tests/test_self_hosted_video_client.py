@@ -151,3 +151,75 @@ def test_self_hosted_s2v_error_is_a_replicate_video_error_for_the_shared_dialogu
 class _Resp:
     def __init__(self, status_code: int):
         self.status_code = status_code
+
+
+class _TimingOutComfy(MockComfyUIS2VClient):
+    def wait_for_completion(self, prompt_id, *, timeout_seconds, poll_interval_seconds):
+        from src.integrations.comfyui_s2v_client import ComfyUIS2VError
+
+        raise ComfyUIS2VError(f"ComfyUI S2V run {prompt_id} did not complete within {timeout_seconds}s")
+
+
+def test_a_clip_given_up_on_is_cancelled_on_the_pod(monkeypatch):
+    _fake_ffprobe(monkeypatch)
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp(200))
+    comfy = _TimingOutComfy()
+    client = SelfHostedS2VVideoClient(MockRunpodClient(), "wt5ennaph7w5nh", comfyui_client_factory=lambda base_url: comfy)
+
+    from src.integrations.comfyui_s2v_client import ComfyUIS2VError
+
+    with pytest.raises(ComfyUIS2VError):
+        client.generate_speech_to_video(
+            prompt="p", image_data_uri=_data_uri(b"i", "image/jpeg"), audio_data_uri=_data_uri(b"a", "audio/mpeg")
+        )
+
+    assert comfy.cancelled == ["mock-s2v-prompt-1"]
+
+
+def test_the_clip_is_billed_for_its_real_render_time_not_its_length(monkeypatch):
+    _fake_ffprobe(monkeypatch)
+    import httpx
+
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: _Resp(200))
+    comfy = MockComfyUIS2VClient(
+        scripted_outputs=[{"58": {"images": [{"filename": "out.mp4", "subfolder": "", "type": "output"}]}}]
+    )
+    client = SelfHostedS2VVideoClient(MockRunpodClient(), "wt5ennaph7w5nh", comfyui_client_factory=lambda base_url: comfy)
+    ticks = iter([100.0, 760.0])
+    client._clock = lambda: next(ticks)
+
+    assert client.billed_seconds(5.2) == 5.2  # nothing rendered yet
+    client.generate_speech_to_video(
+        prompt="p", image_data_uri=_data_uri(b"i", "image/jpeg"), audio_data_uri=_data_uri(b"a", "audio/mpeg")
+    )
+
+    assert client.billed_seconds(5.2) == 660.0
+
+
+def test_startup_cleanup_never_starts_a_stopped_pod(monkeypatch, tmp_path):
+    from src.integrations import self_hosted_video_client as module
+
+    monkeypatch.setenv("RUNPOD_POD_STATE_PATH", str(tmp_path / "state.json"))
+    cleared: list[str] = []
+    monkeypatch.setattr(module, "clear_comfyui_queue", cleared.append)
+    runpod = MockRunpodClient()
+
+    result = module.clear_abandoned_comfyui_work(runpod, "wt5ennaph7w5nh")
+
+    assert "EXITED" in result and cleared == []
+    assert ("start", "wt5ennaph7w5nh") not in runpod.calls
+
+
+def test_startup_cleanup_clears_the_queue_of_a_running_pod(monkeypatch, tmp_path):
+    from src.integrations import self_hosted_video_client as module
+
+    monkeypatch.setenv("RUNPOD_POD_STATE_PATH", str(tmp_path / "state.json"))
+    cleared: list[str] = []
+    monkeypatch.setattr(module, "clear_comfyui_queue", cleared.append)
+    runpod = MockRunpodClient(pods=[{"id": "wt5ennaph7w5nh", "status": "RUNNING"}])
+
+    module.clear_abandoned_comfyui_work(runpod, "wt5ennaph7w5nh")
+
+    assert cleared == ["https://wt5ennaph7w5nh-8188.proxy.runpod.net"]

@@ -640,13 +640,13 @@ class DialoguePipeline:
                     # caller (src/app.py). See this class's own __init__
                     # docstring comment for why this is never a hard-coded
                     # import any more.
-                    cost = duration * self._price_per_second_usd
+                    cost = self._fal_video.billed_seconds(duration) * self._price_per_second_usd
                     clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
                     spent_so_far += cost
                 except Exception as probe_exc:
                     try:
                         duration = _ffprobe_duration(audio_path)
-                        cost = duration * self._price_per_second_usd
+                        cost = self._fal_video.billed_seconds(duration) * self._price_per_second_usd
                         clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
                         spent_so_far += cost
                     except Exception:

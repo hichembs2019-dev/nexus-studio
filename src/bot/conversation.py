@@ -244,6 +244,12 @@ class BotConversation:
         if _MONEY_PATTERN.search(routed.reply):
             routed.reply = self._real_cost_reply(state.screenplay)
 
+        # Owner's instruction, 2026-10-24: "I send an idea only, and the
+        # system writes the whole film". With no draft yet, story text is
+        # never parked waiting for more - it becomes the screenplay now.
+        if routed.intent == "accumulate" and state.screenplay is None:
+            routed.intent = "build_screenplay"
+
         if routed.intent == "accumulate":
             if not pulled_from_pending:
                 self.handle_plain_text(chat_id, source_text)
