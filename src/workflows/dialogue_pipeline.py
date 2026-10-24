@@ -42,6 +42,7 @@ from src.integrations.replicate_image_client import (
     flux2_dev_cost_usd,
 )
 from src.integrations.replicate_video_client import PROVISIONAL_PRICE_PER_SECOND_USD, ReplicateVideoClient
+from src.integrations.runpod_client import RunpodBalanceError
 from src.integrations.tts_client import GRIEF_PROSODY, Prosody, TTSClient
 from src.models import (
     Character,
@@ -415,6 +416,10 @@ class DialoguePipeline:
         # correctly (line A's real audio, then line B's real audio, in
         # the real order they were written) - never a whole multi-turn
         # scene in one call.
+        # Set once the video provider can no longer run at all (Runpod 402,
+        # balance too low) - every later spoken line fails at $0 instead
+        # of each paying for a still first.
+        stop_reason: str | None = None
         i = 0
         n = len(screenplay.lines)
         while i < n:
@@ -469,6 +474,11 @@ class DialoguePipeline:
             photo_path = resolved_photos.get(character.name)
             next_photo_path = resolved_photos.get(next_character.name) if pairs_with_next else None
             pairs_with_next = pairs_with_next and photo_path is not None and next_photo_path is not None
+
+            if stop_reason is not None:
+                failed_lines.append((line, stop_reason))
+                i += 1
+                continue
 
             if pairs_with_next:
                 if self._max_cost_usd is not None and spent_so_far >= self._max_cost_usd:
@@ -590,6 +600,7 @@ class DialoguePipeline:
 
                 shot = shots.get(line.index)
                 if shot is not None:
+                    self._fal_video.prepare()
                     plan, compiled_prompt = shot
                     shot_path, shot_cost = self._generate_shot_still(
                         screenplay, line, plan, compiled_prompt, resolved_photos, prefix
@@ -665,6 +676,11 @@ class DialoguePipeline:
                         )
             except Exception as exc:
                 message = str(exc)
+                if isinstance(exc, RunpodBalanceError):
+                    stop_reason = (
+                        "لم يُنفَّذ (بدون أي تكلفة): رصيد حساب RunPod منخفض جداً لتشغيل السيرفر - "
+                        "اشحن الرصيد ثم أعد المحاولة"
+                    )
                 if billed:
                     message = f"[تم صرف مال حقيقي عند fal.ai قبل هذا الفشل - راجع لوحة fal.ai] {message}"
                 elif shot_billed:

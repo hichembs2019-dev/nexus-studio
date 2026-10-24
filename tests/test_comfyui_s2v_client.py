@@ -126,3 +126,43 @@ def test_mock_client_records_uploads_and_submissions_for_a_test_to_assert_on():
     assert client.uploaded_files == [("line.mp3", b"bytes", "audio/mpeg")]
     assert client.submitted_prompts == [{"client_id": "x", "prompt": {"1": {}}}]
     assert outputs["58"]["images"][0]["filename"] == "f.mp4"
+
+
+def test_wait_for_completion_waits_out_a_short_run_of_proxy_502s(monkeypatch):
+    # Owner's report, 2026-10-24: one 502 from the Runpod proxy failed a whole line.
+    import httpx
+
+    url = "https://pod.example/history/real-id"
+    bad = httpx.Response(502, request=httpx.Request("GET", url))
+    good = httpx.Response(
+        200,
+        request=httpx.Request("GET", url),
+        json={"real-id": {"status": {"status_str": "success", "completed": True}, "outputs": {"58": {"images": [{"filename": "out.mp4"}]}}}},
+    )
+    responses = iter([bad, bad, good])
+    monkeypatch.setattr(httpx, "get", lambda url, *, timeout: next(responses))
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    outputs = RealComfyUIS2VClient("https://pod.example").wait_for_completion("real-id", timeout_seconds=30, poll_interval_seconds=1)
+
+    assert outputs["58"]["images"][0]["filename"] == "out.mp4"
+
+
+def test_wait_for_completion_gives_up_after_a_long_run_of_proxy_errors(monkeypatch):
+    import httpx
+
+    from src.integrations.comfyui_s2v_client import MAX_CONSECUTIVE_POLL_ERRORS, ComfyUIS2VError
+
+    url = "https://pod.example/history/real-id"
+    calls = []
+
+    def fake_get(url, *, timeout):
+        calls.append(url)
+        return httpx.Response(502, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    with pytest.raises(ComfyUIS2VError, match="polls in a row failed"):
+        RealComfyUIS2VClient("https://pod.example").wait_for_completion("real-id", timeout_seconds=30, poll_interval_seconds=1)
+    assert len(calls) == MAX_CONSECUTIVE_POLL_ERRORS

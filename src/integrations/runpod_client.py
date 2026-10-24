@@ -123,6 +123,11 @@ class RunpodCapacityError(RunpodClientError):
     for a create, anywhere matching the requested spec."""
 
 
+class RunpodBalanceError(RunpodClientError):
+    """Runpod answered 402 Payment Required: the account balance is too
+    low to run a pod. No later line of the same run can succeed either."""
+
+
 class RunpodPodNotFoundError(RunpodClientError):
     """GET /v2/pods/{id} returned 404 - the pod was terminated."""
 
@@ -187,6 +192,8 @@ class RealRunpodClient(RunpodClient):
             message = f"Runpod {action} on pod {pod_id} failed ({resp.status_code}): {resp.text[:500]}"
             if action == "start" and resp.status_code == 400 and _START_CAPACITY_MARKER in resp.text.lower():
                 raise RunpodCapacityError(message)
+            if resp.status_code == 402:
+                raise RunpodBalanceError(message)
             raise RunpodClientError(message)
         try:
             return resp.json().get("status", "")
@@ -227,6 +234,8 @@ class RealRunpodClient(RunpodClient):
             message = f"Runpod create pod failed ({resp.status_code}): {resp.text[:500]}"
             if resp.status_code == 400 and _CREATE_CAPACITY_MARKER in resp.text.lower():
                 raise RunpodCapacityError(message)
+            if resp.status_code == 402:
+                raise RunpodBalanceError(message)
             raise RunpodClientError(message)
         return resp.json()
 

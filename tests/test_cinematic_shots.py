@@ -363,3 +363,23 @@ def test_production_sends_the_grief_prosody_to_azure_and_the_crying_face_to_both
     assert tts.prosodies == [None, GRIEF_PROSODY]
     assert GRIEF_FACE_CLAUSE not in shot_client.calls[0][0] and GRIEF_FACE_CLAUSE in shot_client.calls[1][0]
     assert GRIEF_FACE_CLAUSE not in video.calls[0]["prompt"] and GRIEF_FACE_CLAUSE in video.calls[1]["prompt"]
+
+
+def test_a_runpod_balance_refusal_stops_the_run_before_any_more_stills_are_paid_for(tmp_path):
+    from src.integrations.runpod_client import RunpodBalanceError
+
+    class _BrokeVideo(MockReplicateVideoClient):
+        def prepare(self):
+            if len(self.calls) >= 1:
+                raise RunpodBalanceError("Runpod start on pod p failed (402): balance is too low")
+
+    video = _BrokeVideo(scripted_bytes=_mp4(tmp_path / "src.mp4"))
+    pipeline, _, shot_client = _pipeline(tmp_path, video=video)
+
+    produced = pipeline.produce(_screenplay(3))
+
+    assert len(produced.clips) == 1
+    assert len(shot_client.calls) == 1  # no still paid for lines 2 and 3
+    assert [l.index for l, _ in produced.failed_lines] == [1, 2]
+    assert "402" in produced.failed_lines[0][1] and "صورة اللقطة" not in produced.failed_lines[0][1]
+    assert "رصيد حساب RunPod" in produced.failed_lines[1][1] and "بدون أي تكلفة" in produced.failed_lines[1][1]
