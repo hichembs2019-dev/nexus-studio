@@ -74,7 +74,11 @@ jobs:
           # GitHub-secret sync as MULTITALK_ENABLED above, since a coding
           # session has no SSH path to edit .env on the droplet directly.
           # Each line of a cinematic episode adds one paid image.
-          CINEMATIC_SHOTS_ENABLED: ${{ secrets.CINEMATIC_SHOTS_ENABLED }}
+          # Real runs #97-#99 (2026-10-24) received this secret EMPTY even
+          # after the owner saved it, so the owner chose (decision card,
+          # 2026-10-24) to default it to true here; a secret set to
+          # "false" still turns it off.
+          CINEMATIC_SHOTS_ENABLED: ${{ secrets.CINEMATIC_SHOTS_ENABLED || 'true' }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
