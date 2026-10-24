@@ -345,3 +345,21 @@ def test_a_grieving_scene_is_read_slower_and_lower_and_a_calm_one_is_not(tmp_pat
     screenplay.lines[1].action = "weeping, hands over her face"
     assert _line_prosody(screenplay, screenplay.lines[0]) is None
     assert _line_prosody(screenplay, screenplay.lines[1]) == GRIEF_PROSODY
+
+
+def test_production_sends_the_grief_prosody_to_azure_and_the_crying_face_to_both_models(tmp_path):
+    from src.integrations.tts_client import GRIEF_PROSODY
+    from src.workflows.shot_prompt_compiler import GRIEF_FACE_CLAUSE
+
+    tts = MockTTSClient()
+    pipeline, video, shot_client = _pipeline(tmp_path, shot_types=("wide", "close_up"))
+    pipeline._tts = tts
+    screenplay = _screenplay(2)
+    screenplay.lines[1].action = "weeping, hands over her face"
+
+    produced = pipeline.produce(screenplay)
+
+    assert len(produced.clips) == 2
+    assert tts.prosodies == [None, GRIEF_PROSODY]
+    assert GRIEF_FACE_CLAUSE not in shot_client.calls[0][0] and GRIEF_FACE_CLAUSE in shot_client.calls[1][0]
+    assert GRIEF_FACE_CLAUSE not in video.calls[0]["prompt"] and GRIEF_FACE_CLAUSE in video.calls[1]["prompt"]

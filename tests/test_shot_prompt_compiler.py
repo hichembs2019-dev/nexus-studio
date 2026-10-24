@@ -159,5 +159,32 @@ def test_every_video_prompt_ends_with_the_motion_quality_clause():
 
     compiled = ShotPromptCompiler(client).compile(_screenplay(), _shots())
 
-    assert all(c.video_prompt.endswith(MOTION_QUALITY_CLAUSE) for c in compiled)
+    assert all(MOTION_QUALITY_CLAUSE in c.video_prompt for c in compiled)
     assert "tears streaming down the face" in client.calls[0][0]
+
+
+def test_a_grieving_shot_gets_the_crying_face_in_both_prompts_and_a_calm_one_does_not():
+    from src.workflows.shot_prompt_compiler import GRIEF_FACE_CLAUSE
+
+    screenplay = _screenplay()
+    screenplay.scenes[1].mood = "devastated, quietly heartbroken"
+    client = MockAgentReasoningClient([_reply(_item(0), _item(1))])
+
+    calm, sad = ShotPromptCompiler(client).compile(screenplay, _shots())
+
+    assert GRIEF_FACE_CLAUSE not in calm.image_prompt and GRIEF_FACE_CLAUSE not in calm.video_prompt
+    assert GRIEF_FACE_CLAUSE in sad.image_prompt and GRIEF_FACE_CLAUSE in sad.video_prompt
+    assert "cold, frozen" in client.calls[0][0]
+
+
+def test_a_walking_shot_gets_the_natural_walking_clause_in_its_video_prompt():
+    from src.workflows.shot_prompt_compiler import WALKING_CLAUSE
+
+    screenplay = _screenplay()
+    screenplay.lines[1].action = "walks slowly toward the window"
+    client = MockAgentReasoningClient([_reply(_item(0), _item(1))])
+
+    still, walking = ShotPromptCompiler(client).compile(screenplay, _shots())
+
+    assert WALKING_CLAUSE not in still.video_prompt
+    assert walking.video_prompt.endswith(WALKING_CLAUSE)

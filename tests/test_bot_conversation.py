@@ -940,3 +940,29 @@ def test_handle_message_set_captions_preserves_unrelated_pending_text_pulled_fro
 
     again = conversation.handle_message("chat1", "")
     assert again.text == "تم."
+
+
+def test_a_router_reply_that_invents_a_cost_is_replaced_by_the_real_computed_one():
+    # Owner's report, 2026-10-24: the bot showed a made-up "$16,000" for
+    # "wages and crew" - LLM-written text, never computed by code.
+    router_build = _router_reply("build_screenplay", reply="بُني.")
+    router_cost = _router_reply("discuss", reply="الميزانية: أجور وطاقم عمل $16,000")
+    cast = _cast_reply(("فوزية", "female"))
+    lines = _lines_reply(("فوزية", "مرحبا", "smiling"))
+    conversation, _ = _conversation([router_build, cast, lines, router_cost])
+    conversation.handle_message("chat1", 'فوزية قالت: «مرحبا»')
+    screenplay = conversation.get_current_screenplay("chat1")
+
+    reply = conversation.handle_message("chat1", "كم التكلفة؟")
+
+    assert "16,000" not in reply.text and "أجور" not in reply.text and "طاقم" not in reply.text
+    assert reply.text == conversation._real_cost_reply(screenplay)
+    assert "تكلفة السيرفر الرقمي لتوليد الصور والفيديو" in reply.text
+    assert f"${conversation._estimated_cost(screenplay):.2f}" in reply.text
+
+
+def test_a_router_reply_without_money_is_shown_unchanged():
+    router = _router_reply("discuss", reply="المشهد الثاني في المستشفى.")
+    conversation, _ = _conversation([router])
+
+    assert conversation.handle_message("chat1", "أين المشهد الثاني؟").text == "المشهد الثاني في المستشفى."

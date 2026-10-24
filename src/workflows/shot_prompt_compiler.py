@@ -73,8 +73,8 @@ Reply with ONLY a JSON array, one object per shot, in the same order, each with 
   - "video_prompt": one or two English sentences describing the motion in this shot: the character's body movement and facial expression while speaking, and how the scene around them is alive.
 
 Rules:
-  - This is an emotional drama: the face must ACT. Read the action and the scene mood and name the emotion's visible physical signs in BOTH prompts, strongly and concretely - for grief: tears streaming down the face, red wet eyes, trembling lips, a face crumpling while weeping, shoulders shaking with sobs; for anger: clenched jaw, flared nostrils, tense neck; for fear: wide eyes, shallow breath. Never a neutral or calm face unless the mood really is calm.
-  - Prefer emotion carried by the face, hands and upper body. If the action involves walking, describe it as slow, heavy, natural steps.
+  - This is an emotional drama: the face must ACT. Read the action and the scene mood and name the emotion's visible physical signs in BOTH prompts, strongly and concretely - for grief: real tears streaming down the face, a crying face, red wet eyes, trembling lips, a face crumpling while weeping, shoulders shaking with sobs; for shock: wide eyes, open mouth, a frozen breath of disbelief turning into anguish; for anger: clenched jaw, flared nostrils, tense neck; for fear: wide eyes, shallow breath. A cold, frozen, blank or expressionless face is a failed shot - never write one unless the mood really is calm.
+  - Prefer emotion carried by the face, hands and upper body. If the action involves walking, describe it as natural slow dramatic walking with heavy realistic footprints and anatomically correct leg movement.
   - English only. Never include the dialogue, any Arabic, quotation marks or on-screen text.
   - The character never looks at the camera, lens or viewer.
   - Do not mention shot type, camera angle or camera movement - they are added separately.
@@ -92,6 +92,34 @@ MOTION_QUALITY_CLAUSE = (
     "Natural, anatomically correct body movement, realistic weight and footsteps, "
     "no distortion, no extra limbs, strong visible facial emotion."
 )
+
+# Owner's report, 2026-10-24: faces stayed cold in sad scenes. Shared with
+# dialogue_pipeline._line_prosody, so a line that gets the slower, lower
+# grief voice also gets the crying face, decided by the same words.
+GRIEF_WORDS = (
+    "sad", "grief", "griev", "heartbr", "sorrow", "mourn", "despair", "devastat", "tear",
+    "cry", "crie", "weep", "sob", "regret", "anguish", "agony", "remorse", "broken",
+    "shock",
+)
+
+GRIEF_FACE_CLAUSE = (
+    "Strong visible human emotion: real tears streaming down the face, a crying face full of "
+    "shock and anguish, trembling lips, never a cold or frozen expression."
+)
+
+_WALK_WORDS = ("walk", "step", "stride", "pace", "approach", "enter", "leav", "wander", "stagger")
+
+WALKING_CLAUSE = "Natural slow dramatic walking, heavy realistic footprints, anatomically correct movement."
+
+
+def is_grief_moment(mood: str, action: str) -> bool:
+    text = f"{mood} {action}".lower()
+    return any(word in text for word in GRIEF_WORDS)
+
+
+def _is_walking(action: str) -> bool:
+    text = action.lower()
+    return any(word in text for word in _WALK_WORDS)
 
 
 # Same limit and reason as dialogue_writer._LINES_PER_REQUEST (owner's
@@ -130,22 +158,31 @@ class ShotPromptCompiler:
         if got != expected:
             raise ShotPromptCompilerError(f"Compiler returned prompts for lines {got}, needed exactly {expected}")
 
+        lines = {l.index: l for l in screenplay.lines}
+        scenes = {sc.index: sc for sc in screenplay.scenes}
         compiled: list[CompiledShotPrompt] = []
         for shot, item in zip(shots, items):
             image_body = self._checked(item["image_prompt"], shot.line_index, "image_prompt")
             video_body = self._checked(item["video_prompt"], shot.line_index, "video_prompt")
+            line = lines[shot.line_index]
+            scene = scenes.get(line.scene)
+            grief = is_grief_moment(scene.mood if scene else "", line.action)
+            image_emotion = f" {GRIEF_FACE_CLAUSE}" if grief else ""
+            video_extra = (f" {GRIEF_FACE_CLAUSE}" if grief else "") + (
+                f" {WALKING_CLAUSE}" if _is_walking(line.action) else ""
+            )
             compiled.append(
                 CompiledShotPrompt(
                     line_index=shot.line_index,
                     image_prompt=(
                         f"{SHOT_TYPE_PHRASES[shot.shot_type]}, {CAMERA_ANGLE_PHRASES[shot.camera_angle]}, "
-                        f"{image_body} Lighting: {shot.lighting}. The character looks {shot.gaze}, "
+                        f"{image_body}{image_emotion} Lighting: {shot.lighting}. The character looks {shot.gaze}, "
                         f"not at the camera. Photorealistic cinematic film still."
                     ),
                     video_prompt=(
                         f"{CAMERA_MOVEMENT_PHRASES[shot.camera_movement]}, {video_body} "
                         f"In the background: {shot.environment_motion}. The character looks {shot.gaze}. "
-                        f"{MOTION_QUALITY_CLAUSE}"
+                        f"{MOTION_QUALITY_CLAUSE}{video_extra}"
                     ),
                 )
             )

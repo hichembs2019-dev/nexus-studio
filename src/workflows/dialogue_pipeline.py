@@ -52,7 +52,7 @@ from src.models import (
     ProducedDialogueEpisode,
     ShotPlan,
 )
-from src.workflows.shot_prompt_compiler import ShotPromptCompiler
+from src.workflows.shot_prompt_compiler import ShotPromptCompiler, is_grief_moment
 
 CINEMATIC_STYLE_SUFFIX = ", cinematic lighting, warm color grading, emotional close-up shot, high production value television drama"
 
@@ -123,16 +123,9 @@ class DialoguePipelineError(Exception):
 # (both written by the dialogue writer) - the only emotion signal a line
 # carries. See tts_client.GRIEF_PROSODY for why this is prosody and not
 # a crying style.
-_GRIEF_WORDS = (
-    "sad", "grief", "griev", "heartbr", "sorrow", "mourn", "despair", "devastat", "tear",
-    "cry", "crie", "weep", "sob", "regret", "anguish", "agony", "remorse", "broken",
-)
-
-
 def _line_prosody(screenplay: DialogueScreenplay, line: DialogueLine) -> Prosody | None:
     mood = next((s.mood for s in screenplay.scenes if s.index == line.scene), "")
-    text = f"{mood} {line.action}".lower()
-    return GRIEF_PROSODY if any(word in text for word in _GRIEF_WORDS) else None
+    return GRIEF_PROSODY if is_grief_moment(mood, line.action) else None
 
 
 def _character_seed(slug: str, character_name: str) -> int:
