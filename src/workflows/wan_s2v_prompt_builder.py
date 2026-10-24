@@ -66,6 +66,18 @@ VAE_NAME = "wan_2.1_vae.safetensors"
 AUDIO_ENCODER_NAME = "wav2vec2_large_english_fp16.safetensors"
 LORA_NAME = "wan2.2_t2v_lightx2v_4steps_lora_v1.1_high_noise.safetensors"
 
+# Owner's decision, 2026-10-24 ("جرّب 20 خطوة وcfg 6", then "لا يهم البطء
+# ولا تهم التكلفة"): the faces came out frozen with the 4-step lightning
+# LoRA path, so production now uses the official template's OTHER path -
+# read from the same template file on 2026-10-24: UNETLoader ->
+# ModelSamplingSD3 (shift 8) -> KSampler steps=20, cfg=6, uni_pc/simple,
+# with NO LoRA (its own sampler-settings note: "Without 4 Steps lightning
+# LoRA" = 20 steps, cfg 6.0). The 4-step path stays available.
+FULL_STEPS = 20
+FULL_CFG = 6.0
+LIGHTNING_STEPS = 4
+LIGHTNING_CFG = 1.0
+
 FPS = 16.0
 # The official template's own Note: "This model needs at least 73 frames."
 MIN_FRAMES = 73
@@ -92,8 +104,9 @@ def build_s2v_prompt(
     negative_prompt: str = DEFAULT_NEGATIVE_PROMPT,
     width: int = 640,
     height: int = 640,
-    steps: int = 4,
-    cfg: float = 1.0,
+    lightning_lora: bool = False,
+    steps: int | None = None,
+    cfg: float | None = None,
     fps: float = FPS,
     filename_prefix: str = "nexus_studio_s2v",
     client_id: str = "nexus-studio",
@@ -105,15 +118,26 @@ def build_s2v_prompt(
     here by the filename that upload returns.
     """
     length = frames_for_duration(audio_duration_seconds, fps=fps)
+    if steps is None:
+        steps = LIGHTNING_STEPS if lightning_lora else FULL_STEPS
+    if cfg is None:
+        cfg = LIGHTNING_CFG if lightning_lora else FULL_CFG
+    model_nodes: dict = {
+        "37": {"class_type": "UNETLoader", "inputs": {"unet_name": UNET_NAME, "weight_dtype": "default"}},
+    }
+    if lightning_lora:
+        model_nodes["107"] = {
+            "class_type": "LoraLoaderModelOnly",
+            "inputs": {"model": ["37", 0], "lora_name": LORA_NAME, "strength_model": 1},
+        }
+    model_nodes["48"] = {
+        "class_type": "ModelSamplingSD3",
+        "inputs": {"model": ["107", 0] if lightning_lora else ["37", 0], "shift": 8},
+    }
     return {
         "client_id": client_id,
         "prompt": {
-            "37": {"class_type": "UNETLoader", "inputs": {"unet_name": UNET_NAME, "weight_dtype": "default"}},
-            "107": {
-                "class_type": "LoraLoaderModelOnly",
-                "inputs": {"model": ["37", 0], "lora_name": LORA_NAME, "strength_model": 1},
-            },
-            "48": {"class_type": "ModelSamplingSD3", "inputs": {"model": ["107", 0], "shift": 8}},
+            **model_nodes,
             "38": {"class_type": "CLIPLoader", "inputs": {"clip_name": CLIP_NAME, "type": "wan", "device": "default"}},
             "39": {"class_type": "VAELoader", "inputs": {"vae_name": VAE_NAME}},
             "60": {"class_type": "AudioEncoderLoader", "inputs": {"audio_encoder_name": AUDIO_ENCODER_NAME}},

@@ -50,7 +50,7 @@ def test_build_s2v_prompt_uses_the_real_vae_not_the_ti2v_5b_one():
 def test_build_s2v_prompt_wires_the_lightning_lora_before_model_sampling():
     body = build_s2v_prompt(
         positive_prompt="p", ref_image_filename="ref.png", audio_filename="a.mp3",
-        audio_duration_seconds=5.0, seed=1,
+        audio_duration_seconds=5.0, seed=1, lightning_lora=True,
     )
     prompt = body["prompt"]
     assert prompt["107"]["class_type"] == "LoraLoaderModelOnly"
@@ -65,7 +65,7 @@ def test_build_s2v_prompt_real_ksampler_values_match_the_official_lightning_path
     # (non-muted) node graph, not this node's own schema defaults.
     body = build_s2v_prompt(
         positive_prompt="p", ref_image_filename="ref.png", audio_filename="a.mp3",
-        audio_duration_seconds=5.0, seed=99,
+        audio_duration_seconds=5.0, seed=99, lightning_lora=True,
     )
     ksampler = body["prompt"]["3"]["inputs"]
     assert ksampler["steps"] == 4
@@ -111,3 +111,21 @@ def test_build_s2v_prompt_real_width_height_match_the_official_template():
     assert s2v_node["height"] == 640
     assert s2v_node["ref_image"] == ["61", 0]
     assert s2v_node["audio_encoder_output"] == ["63", 0]
+
+
+def test_build_s2v_prompt_defaults_to_the_official_20_step_cfg_6_path_without_the_lora():
+    # Owner's decision, 2026-10-24. Values read from the official
+    # template's bypassed 20-step path: UNETLoader -> ModelSamplingSD3
+    # (shift 8) -> KSampler steps 20, cfg 6, no LoraLoaderModelOnly.
+    body = build_s2v_prompt(
+        positive_prompt="p", ref_image_filename="ref.png", audio_filename="a.mp3",
+        audio_duration_seconds=5.0, seed=7,
+    )
+    prompt = body["prompt"]
+    assert "107" not in prompt
+    assert not any(node["class_type"] == "LoraLoaderModelOnly" for node in prompt.values())
+    assert prompt["48"]["inputs"] == {"model": ["37", 0], "shift": 8}
+    ksampler = prompt["3"]["inputs"]
+    assert (ksampler["steps"], ksampler["cfg"]) == (20, 6.0)
+    assert (ksampler["sampler_name"], ksampler["scheduler"]) == ("uni_pc", "simple")
+    assert ksampler["model"] == ["48", 0]
