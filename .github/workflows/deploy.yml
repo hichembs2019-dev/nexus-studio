@@ -69,11 +69,17 @@ jobs:
           # through GitHub's own UI, the same action they already took for
           # those three real keys.
           MULTITALK_ENABLED: ${{ secrets.MULTITALK_ENABLED }}
+          # Owner's explicit instruction, 2026-10-24 (set
+          # CINEMATIC_SHOTS_ENABLED=true in .env and restart): same
+          # GitHub-secret sync as MULTITALK_ENABLED above, since a coding
+          # session has no SSH path to edit .env on the droplet directly.
+          # Each line of a cinematic episode adds one paid image.
+          CINEMATIC_SHOTS_ENABLED: ${{ secrets.CINEMATIC_SHOTS_ENABLED }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: REPLICATE_API_TOKEN,RUNPOD_API_KEY,RUNPOD_S2V_POD_ID,MULTITALK_ENABLED
+          envs: REPLICATE_API_TOKEN,RUNPOD_API_KEY,RUNPOD_S2V_POD_ID,MULTITALK_ENABLED,CINEMATIC_SHOTS_ENABLED
           script: |
             set -e
             cd ~/nexus-studio
@@ -118,6 +124,13 @@ jobs:
                 sed -i "s|^MULTITALK_ENABLED=.*|MULTITALK_ENABLED=${MULTITALK_ENABLED}|" .env
               else
                 echo "MULTITALK_ENABLED=${MULTITALK_ENABLED}" >> .env
+              fi
+            fi
+            if [ -n "${CINEMATIC_SHOTS_ENABLED:-}" ]; then
+              if grep -q "^CINEMATIC_SHOTS_ENABLED=" .env 2>/dev/null; then
+                sed -i "s|^CINEMATIC_SHOTS_ENABLED=.*|CINEMATIC_SHOTS_ENABLED=${CINEMATIC_SHOTS_ENABLED}|" .env
+              else
+                echo "CINEMATIC_SHOTS_ENABLED=${CINEMATIC_SHOTS_ENABLED}" >> .env
               fi
             fi
             git pull origin main
@@ -167,4 +180,10 @@ jobs:
               grep "^MULTITALK_ENABLED=" .env
             else
               echo "MULTITALK_ENABLED: not set in .env - defaults to OFF (config.py)"
+            fi
+            echo "=== real cinematic shot switch (CINEMATIC_SHOTS_ENABLED) ==="
+            if grep -q "^CINEMATIC_SHOTS_ENABLED=..*" .env 2>/dev/null; then
+              grep "^CINEMATIC_SHOTS_ENABLED=" .env
+            else
+              echo "CINEMATIC_SHOTS_ENABLED: not set in .env - defaults to OFF (config.py)"
             fi
