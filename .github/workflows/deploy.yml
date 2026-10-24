@@ -141,7 +141,11 @@ jobs:
             # --force-recreate (owner's instruction, 2026-10-24: a full,
             # clean restart on every deploy): the container is replaced
             # even when compose sees no config change.
-            docker compose up -d --build --force-recreate nexus-studio
+            # --no-cache (owner's instruction, 2026-10-24: a clean deploy
+            # with the cache fully cleared): every image layer is rebuilt
+            # from scratch, nothing reused from an earlier build.
+            docker compose build --no-cache nexus-studio
+            docker compose up -d --force-recreate nexus-studio
             sleep 8
             docker compose logs --tail=30 nexus-studio
             # Owner's concern, 2026-10-24: "the server ignores the new code
@@ -150,7 +154,7 @@ jobs:
             # are hashed and compared with the same files in the repo
             # checkout that was just pulled.
             echo "=== running code vs repo (commit $(git rev-parse --short HEAD)) ==="
-            CODE_FILES="src/app.py src/config.py src/workflows/dialogue_pipeline.py src/agents/shot_director.py src/agents/dialogue_writer.py src/integrations/replicate_image_client.py"
+            CODE_FILES="src/app.py src/config.py src/workflows/dialogue_pipeline.py src/agents/shot_director.py src/agents/dialogue_writer.py src/integrations/replicate_image_client.py src/bot/conversation.py src/workflows/shot_prompt_compiler.py src/integrations/tts_client.py src/workflows/wan_s2v_prompt_builder.py src/integrations/self_hosted_video_client.py"
             REPO_SUM=$(cat $CODE_FILES | sha256sum | cut -d' ' -f1)
             CONTAINER_SUM=$(docker compose exec -T nexus-studio sh -c "cat $CODE_FILES" | sha256sum | cut -d' ' -f1)
             if [ "$REPO_SUM" = "$CONTAINER_SUM" ]; then

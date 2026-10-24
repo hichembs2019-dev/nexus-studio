@@ -52,6 +52,8 @@ same as `/new`.
 """
 from __future__ import annotations
 
+import re
+
 from dataclasses import dataclass, field
 
 from src.agents.dialogue_writer import DialogueWriterAgent, DialogueWriterError, count_quoted_moments
@@ -88,6 +90,17 @@ ESTIMATED_SECONDS_PER_LINE = 4.0
 # 4096, per real developer reports - not officially documented, so this
 # stays conservative rather than cutting it exactly at the edge).
 TELEGRAM_MESSAGE_LIMIT = 4000
+
+
+# Owner's report, 2026-10-24: the bot showed a made-up "$16,000" for
+# "wages and crew". No code path writes that - it came from LLM-written
+# text. The only cost the owner may ever see is the one computed here in
+# code, so any LLM reply that mentions money is replaced, never shown.
+COST_LABEL = "تكلفة السيرفر الرقمي لتوليد الصور والفيديو"
+_MONEY_PATTERN = re.compile(
+    r"[$€£]|\d\s*(?:usd|eur)\b|دولار|يورو|أجور|اجور|طاقم|ميزاني|تكلف|budget|wage|crew|\bcosts?\b",
+    re.IGNORECASE,
+)
 
 
 def split_for_telegram(text: str, limit: int = TELEGRAM_MESSAGE_LIMIT) -> list[str]:
@@ -227,6 +240,9 @@ class BotConversation:
             )
         except DialogueWriterError as exc:
             return BotReply(text=f"تعذّر فهم رسالتك: {exc}")
+
+        if _MONEY_PATTERN.search(routed.reply):
+            routed.reply = self._real_cost_reply(state.screenplay)
 
         if routed.intent == "accumulate":
             if not pulled_from_pending:
@@ -600,7 +616,7 @@ class BotConversation:
             if produced.clips:
                 return BotReply(
                     text=(
-                        f"⚠️ تم توليد {len(produced.clips)} مقطع حقيقي بنجاح (التكلفة الحقيقية "
+                        f"⚠️ تم توليد {len(produced.clips)} مقطع حقيقي بنجاح ({COST_LABEL}، الحقيقية: "
                         f"${produced.total_cost_usd:.3f}) لكن تعذّر دمجها في فيديو واحد - "
                         f"كل مقطع مُرسل أدناه منفصلًا.{stitch_note}{failed_note}{skipped_note}{portrait_note}"
                     ),
@@ -608,13 +624,13 @@ class BotConversation:
                 )
             return BotReply(
                 text=(
-                    f"تم توليد 0 مقطع. التكلفة الحقيقية حتى الآن: ${produced.total_cost_usd:.3f}"
+                    f"تم توليد 0 مقطع. {COST_LABEL}، الحقيقية حتى الآن: ${produced.total_cost_usd:.3f}"
                     f"{stitch_note}{failed_note}{skipped_note}{portrait_note}"
                 )
             )
         return BotReply(
             text=(
-                f"✅ تم. {len(produced.clips)} مقطع حوار، التكلفة الحقيقية "
+                f"✅ تم. {len(produced.clips)} مقطع حوار، {COST_LABEL}، الحقيقية: "
                 f"${produced.total_cost_usd:.3f}.{failed_note}{skipped_note}{portrait_note}"
             ),
             video_path=produced.stitched_path,
@@ -650,6 +666,30 @@ class BotConversation:
             return BotReply(text=f"✅ نُشر على قناة Nexora: https://youtu.be/{result.video_id}")
         return BotReply(text=f"✅ نُشر على {platform}: {result.video_id}")
 
+    def _estimated_cost(self, screenplay: DialogueScreenplay) -> float:
+        spoken_count = sum(1 for l in screenplay.lines if l.spoken)
+        # Real bug found by code review, 2026-10-21: this estimate only
+        # ever counted spoken-line video cost - never the real portrait
+        # generation cost DialoguePipeline also spends, once per character
+        # who appears in any line at all (spoken or captioned).
+        appearing_character_count = len({l.character for l in screenplay.lines})
+        # Uses self._price_per_second_usd - the real rate for whichever
+        # provider is actually wired in (src/app.py), never a hard-coded
+        # fal.ai-specific constant. See __init__'s own comment above.
+        return (
+            spoken_count * ESTIMATED_SECONDS_PER_LINE * self._price_per_second_usd
+            + appearing_character_count * self._price_per_image_usd
+            + spoken_count * self._estimated_shot_image_usd
+        )
+
+    def _real_cost_reply(self, screenplay: DialogueScreenplay | None) -> str:
+        if screenplay is None:
+            return f"{COST_LABEL} يحسبها النظام فقط، وتظهر تحت السيناريو بعد كتابته."
+        return (
+            f"{COST_LABEL} (يحسبها النظام فقط، تقديرية): ${self._estimated_cost(screenplay):.2f}. "
+            f"القيمة الحقيقية تظهر بعد التوليد الفعلي."
+        )
+
     def _format_screenplay(self, screenplay: DialogueScreenplay) -> str:
         lines = [f"📝 {screenplay.title}", "", "الشخصيات:"]
         for c in screenplay.characters:
@@ -682,24 +722,8 @@ class BotConversation:
             marker = " (نص على الشاشة - بدون صوت، تكلفة $0)" if not l.spoken else ""
             lines.append(f"{l.index + 1}. {l.character}: {l.line}{marker}")
         lines.append("")
-        spoken_count = sum(1 for l in screenplay.lines if l.spoken)
-        # Real bug found by code review, 2026-10-21: this estimate only
-        # ever counted spoken-line video cost - never the real portrait
-        # generation cost (fal-ai/flux/dev, $0.025/megapixel) DialoguePipeline
-        # also spends, once per character who appears in any line at all
-        # (spoken or captioned). The number shown before Approve - the one
-        # moment that matters most for a cost this owner has been burned
-        # by before - silently understated the real total every time.
-        appearing_character_count = len({l.character for l in screenplay.lines})
-        # Uses self._price_per_second_usd - the real rate for whichever
-        # provider is actually wired in (src/app.py), never a hard-coded
-        # fal.ai-specific constant. See __init__'s own comment above.
-        est_cost = (
-            spoken_count * ESTIMATED_SECONDS_PER_LINE * self._price_per_second_usd
-            + appearing_character_count * self._price_per_image_usd
-            + spoken_count * self._estimated_shot_image_usd
-        )
-        lines.append(f"(تكلفة تقديرية تقريبية: ${est_cost:.2f} - التكلفة الحقيقية تُحسب بعد التوليد الفعلي)")
+        est_cost = self._estimated_cost(screenplay)
+        lines.append(f"({COST_LABEL}، تقديرية: ${est_cost:.2f} - القيمة الحقيقية تُحسب بعد التوليد الفعلي)")
         lines.append("لتعديل سطر أو عدة أسطر دفعة واحدة، كل تعديل في سطر منفصل:\n/edit\n<الرقم> <الحوار الجديد>\n<رقم آخر> <حوار آخر>")
         lines.append("لجعل سطر (أو عدة أسطر) نصًا مكتوبًا على الشاشة بدل صوت حقيقي (بتكلفة $0): /caption <الرقم> [أرقام أخرى]")
         return "\n".join(lines)
