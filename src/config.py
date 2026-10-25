@@ -91,6 +91,16 @@ class Settings:
     # same posture as multitalk_enabled: deploying this changes nothing
     # about what the next approved screenplay spends until it is turned on.
     cinematic_shots_enabled: bool = False
+    # Kling motion + lip sync (owner's choice, 2026-10-25): preferred over
+    # both Wan S2V paths when on. Off by default - deploying this code
+    # changes nothing until the owner sets KLING_VIDEO_ENABLED=true AND a
+    # KLING_API_KEY from their own Kling account. Unit price defaults to
+    # the 180-day pack rate (kling.ai/dev/pricing, 2026-10-25); the trial
+    # pack is 0.098.
+    kling_api_key: str = ""
+    kling_video_enabled: bool = False
+    kling_unit_price_usd: float = 0.14
+    kling_resolution: str = "720p"
 
     @property
     def groq_configured(self) -> bool:
@@ -127,6 +137,10 @@ class Settings:
         )
 
     @property
+    def kling_configured(self) -> bool:
+        return self.kling_video_enabled and bool(self.kling_api_key)
+
+    @property
     def multitalk_configured(self) -> bool:
         return self.multitalk_enabled and self.self_hosted_s2v_configured
 
@@ -156,4 +170,8 @@ class Settings:
             output_dir=os.environ.get("OUTPUT_DIR", "./output"),
             max_episode_cost_usd=float(os.environ.get("MAX_EPISODE_COST_USD", "10.0")),
             cinematic_shots_enabled=os.environ.get("CINEMATIC_SHOTS_ENABLED", "").strip().lower() in ("1", "true", "yes"),
+            kling_api_key=os.environ.get("KLING_API_KEY", ""),
+            kling_video_enabled=os.environ.get("KLING_VIDEO_ENABLED", "").strip().lower() in ("1", "true", "yes"),
+            kling_unit_price_usd=float(os.environ.get("KLING_UNIT_PRICE_USD", "0.14")),
+            kling_resolution=os.environ.get("KLING_RESOLUTION", "720p"),
         )

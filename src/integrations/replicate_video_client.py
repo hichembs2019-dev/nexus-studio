@@ -127,6 +127,12 @@ class ReplicateVideoClient(ABC):
         length; a self-hosted pod bills by how long it actually ran."""
         return clip_duration_seconds
 
+    def last_cost_usd(self) -> float | None:
+        """The real cost of the last clip when the provider itself reports
+        it (Kling's own deductions); None means "compute it from
+        billed_seconds() x the configured rate", as before."""
+        return None
+
 
 class RealReplicateVideoClient(ReplicateVideoClient):
     def __init__(self, api_token: str):

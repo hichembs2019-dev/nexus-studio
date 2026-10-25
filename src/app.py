@@ -33,6 +33,7 @@ from .integrations.replicate_video_client import (
     RealReplicateVideoClient,
     ReplicateVideoClient,
 )
+from .integrations.kling_video_client import KlingVideoClient, estimated_price_per_second_usd
 from .integrations.multitalk_video_client import MultiTalkVideoClient
 from .integrations.runpod_client import RealRunpodClient
 from .integrations.self_hosted_video_client import SelfHostedS2VVideoClient, self_hosted_price_per_second_usd
@@ -186,7 +187,32 @@ def build_app(settings: Settings, *, force_mocks: bool = False) -> App:
     # rebuilding this pipeline at all was quality ("فوزية و جويدة ...
     # احسن و واقعي اكثر من drama"), so once it is configured it is the
     # real path actually used, not a lower-priority fallback.
-    if not force_mocks and settings.self_hosted_s2v_configured and settings.replicate_configured and settings.azure_speech_configured:
+    # Kling (owner's choice, 2026-10-25): the only configured provider
+    # that makes real body/camera motion, so it wins when the owner has
+    # explicitly turned it on. Portraits and shot stills stay on Replicate.
+    # MultiTalk is not used here - it pastes two portraits side by side,
+    # the opposite of a moving shot.
+    if not force_mocks and settings.kling_configured and settings.replicate_configured and settings.azure_speech_configured:
+        video_client = KlingVideoClient(
+            settings.kling_api_key,
+            unit_price_usd=settings.kling_unit_price_usd,
+            resolution=settings.kling_resolution,
+        )
+        image_client = RealReplicateImageClient(settings.replicate_api_token)
+        price_per_second_usd = estimated_price_per_second_usd(settings.kling_unit_price_usd, settings.kling_resolution)
+        logger.info("Real video provider: Kling 3.0 + Lip Sync (%s)", settings.kling_resolution)
+        logger.info("Real image provider: Replicate (black-forest-labs/flux-dev)")
+        dialogue_writer = DialogueWriterAgent(writer_reasoning)
+        dialogue_pipeline = DialoguePipeline(
+            video_client, tts, settings.output_dir,
+            tts_lang=settings.azure_tts_lang,
+            max_cost_usd=settings.max_episode_cost_usd,
+            image_client=image_client,
+            price_per_second_usd=price_per_second_usd,
+            price_per_image_usd=price_per_image_usd,
+            **shot_kwargs,
+        )
+    elif not force_mocks and settings.self_hosted_s2v_configured and settings.replicate_configured and settings.azure_speech_configured:
         video_client = SelfHostedS2VVideoClient(
             RealRunpodClient(settings.runpod_api_key), settings.runpod_s2v_pod_id, **s2v_size
         )

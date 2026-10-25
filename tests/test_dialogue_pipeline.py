@@ -1202,3 +1202,67 @@ def test_build_two_speaker_reference_caches_the_real_composite_and_masks(tmp_pat
     ref_path_2, _, _ = pipeline._build_two_speaker_reference(portrait_1, portrait_2, "ep", "a", "b")
     assert ref_path_2 == ref_path
     assert os.path.getmtime(ref_path) == mtime_before
+
+
+class _ReportingVideoClient(MockReplicateVideoClient):
+    """A provider that reports each clip's own real cost (Kling) and can
+    fail AFTER part of the clip was paid for."""
+
+    def __init__(self, scripted_bytes: bytes, costs: list[float | None], errors: list[Exception | None]):
+        super().__init__(scripted_bytes=scripted_bytes)
+        self._costs = costs
+        self._errors = errors
+        self._cost: float | None = None
+
+    def last_cost_usd(self):
+        return self._cost
+
+    def generate_speech_to_video(self, **kwargs):
+        index = len(self.calls)
+        super().generate_speech_to_video(**kwargs)
+        self._cost = self._costs[index]
+        if self._errors[index] is not None:
+            raise self._errors[index]
+        return self._scripted_bytes
+
+
+def _two_line_screenplay() -> DialogueScreenplay:
+    return DialogueScreenplay(
+        title="t", premise="p",
+        characters=[Character(name="A", appearance="short dark hair")],
+        lines=[
+            DialogueLine(index=0, character="A", line="واحد", action="a1"),
+            DialogueLine(index=1, character="A", line="اثنان", action="a2"),
+        ],
+    )
+
+
+def test_produce_uses_the_providers_own_reported_clip_cost_and_counts_partial_spend(tmp_path):
+    from src.integrations.kling_video_client import KlingVideoError
+
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    video = _ReportingVideoClient(clip_bytes, costs=[0.355, 0.43], errors=[None, KlingVideoError("no face")])
+    pipeline = DialoguePipeline(
+        video, MockTTSClient(), str(tmp_path), image_client=MockReplicateImageClient(), price_per_second_usd=99.0
+    )
+
+    produced = pipeline.produce(_two_line_screenplay())
+
+    # Reported cost wins over seconds x rate (which would be ~$99).
+    assert produced.clips[0].cost_usd == pytest.approx(0.355)
+    line, message = produced.failed_lines[0]
+    assert line.index == 1
+    assert "0.43" in message and "no face" in message
+
+
+def test_produce_stops_every_later_line_once_the_kling_pack_is_exhausted(tmp_path):
+    from src.integrations.kling_video_client import KlingBalanceError
+
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    video = _ReportingVideoClient(clip_bytes, costs=[None, None], errors=[KlingBalanceError("code 1102"), None])
+    pipeline = DialoguePipeline(video, MockTTSClient(), str(tmp_path), image_client=MockReplicateImageClient())
+
+    produced = pipeline.produce(_two_line_screenplay())
+
+    assert len(video.calls) == 1  # the second line never reached Kling
+    assert "Kling" in produced.failed_lines[1][1]

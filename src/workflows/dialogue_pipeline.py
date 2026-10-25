@@ -33,6 +33,7 @@ import os
 import subprocess
 
 from src.agents.shot_director import ShotDirectorAgent
+from src.integrations.kling_video_client import KlingBalanceError
 from src.integrations.multitalk_video_client import MultiTalkVideoClient
 from src.integrations.replicate_image_client import (
     FLUX2_DEV_PRICE_PER_MEGAPIXEL_USD_UNVERIFIED,
@@ -651,13 +652,13 @@ class DialoguePipeline:
                     # caller (src/app.py). See this class's own __init__
                     # docstring comment for why this is never a hard-coded
                     # import any more.
-                    cost = self._fal_video.billed_seconds(duration) * self._price_per_second_usd
+                    cost = self._clip_cost(duration)
                     clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
                     spent_so_far += cost
                 except Exception as probe_exc:
                     try:
                         duration = _ffprobe_duration(audio_path)
-                        cost = self._fal_video.billed_seconds(duration) * self._price_per_second_usd
+                        cost = self._clip_cost(duration)
                         clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
                         spent_so_far += cost
                     except Exception:
@@ -681,7 +682,18 @@ class DialoguePipeline:
                         "لم يُنفَّذ (بدون أي تكلفة): رصيد حساب RunPod منخفض جداً لتشغيل السيرفر - "
                         "اشحن الرصيد ثم أعد المحاولة"
                     )
-                if billed:
+                elif isinstance(exc, KlingBalanceError):
+                    stop_reason = (
+                        "لم يُنفَّذ (بدون أي تكلفة): باقة Kling منتهية أو غير كافية - "
+                        "اشترِ باقة ثم أعد المحاولة"
+                    )
+                partial_cost = None if billed else self._fal_video.last_cost_usd()
+                if partial_cost:
+                    # Kling: the paid motion shot exists, a later step
+                    # (face / lip sync) failed - counted against the ceiling.
+                    spent_so_far += partial_cost
+                    message = f"[تم صرف ${partial_cost:.2f} حقيقية عند مزود الفيديو قبل هذا الفشل] {message}"
+                elif billed:
                     message = f"[تم صرف مال حقيقي عند fal.ai قبل هذا الفشل - راجع لوحة fal.ai] {message}"
                 elif shot_billed:
                     message = f"[تم صرف مال حقيقي على صورة اللقطة (flux-2-dev) قبل هذا الفشل] {message}"
@@ -720,6 +732,12 @@ class DialoguePipeline:
             portrait_failures=portrait_failures,
             shot_image_cost_usd=shot_image_cost_usd,
         )
+
+    def _clip_cost(self, clip_duration_seconds: float) -> float:
+        reported = self._fal_video.last_cost_usd()
+        if reported is not None:
+            return reported
+        return self._fal_video.billed_seconds(clip_duration_seconds) * self._price_per_second_usd
 
     def _generate_shot_still(
         self,

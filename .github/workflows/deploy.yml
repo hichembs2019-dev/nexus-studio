@@ -82,11 +82,17 @@ jobs:
           # 2026-10-24) to default it to true here; a secret set to
           # "false" still turns it off.
           CINEMATIC_SHOTS_ENABLED: ${{ secrets.CINEMATIC_SHOTS_ENABLED || 'true' }}
+          # Kling motion + lip sync (owner's choice, 2026-10-25): no default -
+          # stays off until the owner adds KLING_VIDEO_ENABLED=true and their
+          # own KLING_API_KEY as repository secrets.
+          KLING_API_KEY: ${{ secrets.KLING_API_KEY }}
+          KLING_VIDEO_ENABLED: ${{ secrets.KLING_VIDEO_ENABLED }}
+          KLING_UNIT_PRICE_USD: ${{ secrets.KLING_UNIT_PRICE_USD }}
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
-          envs: REPLICATE_API_TOKEN,RUNPOD_API_KEY,RUNPOD_S2V_POD_ID,MULTITALK_ENABLED,CINEMATIC_SHOTS_ENABLED
+          envs: REPLICATE_API_TOKEN,RUNPOD_API_KEY,RUNPOD_S2V_POD_ID,MULTITALK_ENABLED,CINEMATIC_SHOTS_ENABLED,KLING_API_KEY,KLING_VIDEO_ENABLED,KLING_UNIT_PRICE_USD
           script: |
             set -e
             cd ~/nexus-studio
@@ -138,6 +144,27 @@ jobs:
                 sed -i "s|^CINEMATIC_SHOTS_ENABLED=.*|CINEMATIC_SHOTS_ENABLED=${CINEMATIC_SHOTS_ENABLED}|" .env
               else
                 echo "CINEMATIC_SHOTS_ENABLED=${CINEMATIC_SHOTS_ENABLED}" >> .env
+              fi
+            fi
+            if [ -n "${KLING_API_KEY:-}" ]; then
+              if grep -q "^KLING_API_KEY=" .env 2>/dev/null; then
+                sed -i "s|^KLING_API_KEY=.*|KLING_API_KEY=${KLING_API_KEY}|" .env
+              else
+                echo "KLING_API_KEY=${KLING_API_KEY}" >> .env
+              fi
+            fi
+            if [ -n "${KLING_VIDEO_ENABLED:-}" ]; then
+              if grep -q "^KLING_VIDEO_ENABLED=" .env 2>/dev/null; then
+                sed -i "s|^KLING_VIDEO_ENABLED=.*|KLING_VIDEO_ENABLED=${KLING_VIDEO_ENABLED}|" .env
+              else
+                echo "KLING_VIDEO_ENABLED=${KLING_VIDEO_ENABLED}" >> .env
+              fi
+            fi
+            if [ -n "${KLING_UNIT_PRICE_USD:-}" ]; then
+              if grep -q "^KLING_UNIT_PRICE_USD=" .env 2>/dev/null; then
+                sed -i "s|^KLING_UNIT_PRICE_USD=.*|KLING_UNIT_PRICE_USD=${KLING_UNIT_PRICE_USD}|" .env
+              else
+                echo "KLING_UNIT_PRICE_USD=${KLING_UNIT_PRICE_USD}" >> .env
               fi
             fi
             git pull origin main
