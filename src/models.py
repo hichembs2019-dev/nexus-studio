@@ -252,8 +252,8 @@ class ProducedDialogueEpisode:
     # Cinematic shot mode: the real cost of every flux-2-dev shot still
     # generated in this run, including stills whose video then failed.
     shot_image_cost_usd: float = 0.0
-    # Clips the owner rejected with "redo" during review - paid for, not
-    # in the final video.
+    # Paid for but not in the final video: clips the owner rejected during
+    # review, and the paid part of a clip whose later step failed (Kling).
     rejected_cost_usd: float = 0.0
 
     @property

@@ -1253,6 +1253,8 @@ def test_produce_uses_the_providers_own_reported_clip_cost_and_counts_partial_sp
     line, message = produced.failed_lines[0]
     assert line.index == 1
     assert "0.43" in message and "no face" in message
+    assert produced.rejected_cost_usd == pytest.approx(0.43)
+    assert produced.total_cost_usd == pytest.approx(0.355 + 0.43 + produced.portrait_cost_usd)
 
 
 def test_produce_stops_every_later_line_once_the_kling_pack_is_exhausted(tmp_path):
@@ -1279,8 +1281,8 @@ def _three_line_screenplay() -> DialogueScreenplay:
 def _scripted_reviewer(decisions: list[str]):
     calls = []
 
-    def review(line, clip, attempt, can_redo):
-        calls.append((line.index, attempt, can_redo, clip.cost_usd))
+    def review(line, clip, attempt, can_redo, note):
+        calls.append((line.index, attempt, can_redo, clip.cost_usd, note))
         return decisions[len(calls) - 1]
 
     return review, calls
@@ -1337,7 +1339,7 @@ def test_review_failure_stops_production(tmp_path):
     video = _ReportingVideoClient(clip_bytes, costs=[0.1] * 3, errors=[None] * 3)
     pipeline = DialoguePipeline(video, MockTTSClient(), str(tmp_path), image_client=MockReplicateImageClient())
 
-    def broken(line, clip, attempt, can_redo):
+    def broken(line, clip, attempt, can_redo, note):
         raise RuntimeError("telegram down")
 
     produced = pipeline.produce(_three_line_screenplay(), clip_reviewer=broken)
@@ -1367,6 +1369,43 @@ def test_review_has_no_per_line_limit_by_default(tmp_path):
 
     produced = pipeline.produce(_three_line_screenplay(), clip_reviewer=review)
 
-    assert all(can_redo for _, _, can_redo, _ in calls)
+    assert all(c[2] for c in calls)
     assert len(video.calls) == 8
     assert produced.rejected_cost_usd == pytest.approx(0.5)
+
+
+def test_review_can_go_back_to_an_earlier_attempt(tmp_path):
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    video = _ReportingVideoClient(clip_bytes, costs=[0.1, 0.2, 0.3, 0.4, 0.5], errors=[None] * 5)
+    pipeline = DialoguePipeline(video, MockTTSClient(), str(tmp_path), image_client=MockReplicateImageClient())
+    review, calls = _scripted_reviewer(["redo", "redo", "pick:1", "accept", "accept"])
+
+    produced = pipeline.produce(_three_line_screenplay(), clip_reviewer=review)
+
+    first = produced.clips[0]
+    assert first.cost_usd == pytest.approx(0.1)
+    # Each attempt kept its own file, so attempt 1 was not overwritten.
+    assert first.local_path.endswith("_line000.mp4")
+    assert os.path.exists(first.local_path)
+    assert os.path.exists(str(tmp_path / "t_line000_try3.mp4"))
+    assert produced.rejected_cost_usd == pytest.approx(0.2 + 0.3)
+    assert produced.total_cost_usd == pytest.approx(0.1 + 0.2 + 0.3 + 0.4 + 0.5 + produced.portrait_cost_usd)
+
+
+def test_a_failed_redo_brings_back_the_previous_attempt(tmp_path):
+    from src.integrations.kling_video_client import KlingVideoError
+
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    video = _ReportingVideoClient(
+        clip_bytes, costs=[0.1, None, 0.3, 0.4], errors=[None, KlingVideoError("lip sync failed"), None, None]
+    )
+    pipeline = DialoguePipeline(video, MockTTSClient(), str(tmp_path), image_client=MockReplicateImageClient())
+    review, calls = _scripted_reviewer(["redo", "accept", "accept", "accept"])
+
+    produced = pipeline.produce(_three_line_screenplay(), clip_reviewer=review)
+
+    assert calls[1][1] == 1  # attempt 1 shown again
+    assert "lip sync failed" in calls[1][4]
+    assert produced.clips[0].cost_usd == pytest.approx(0.1)
+    assert produced.failed_lines == []
+    assert produced.rejected_cost_usd == pytest.approx(0.0)

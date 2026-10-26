@@ -609,7 +609,7 @@ class BotConversation:
             else ""
         )
         if produced.rejected_cost_usd:
-            portrait_note += f"\n\n🔁 لقطات أعدتَها (مدفوعة، ليست في الفيديو): ${produced.rejected_cost_usd:.3f} - محسوبة في المجموع."
+            portrait_note += f"\n\n🔁 مدفوع وليس في الفيديو (لقطات أعدتَها أو تخطّيتَها، أو لقطة فشلت بعد الدفع): ${produced.rejected_cost_usd:.3f} - محسوبة في المجموع."
         if produced.stitched_path is None:
             # Real incident, 2026-10-20: a real $8.18 run's clips were all
             # genuinely finished, but the merge step failed and the owner
