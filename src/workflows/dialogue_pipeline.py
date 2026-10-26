@@ -31,8 +31,10 @@ import hashlib
 import mimetypes
 import os
 import subprocess
+from typing import Callable
 
 from src.agents.shot_director import ShotDirectorAgent
+from src.integrations.kling_video_client import KlingBalanceError
 from src.integrations.multitalk_video_client import MultiTalkVideoClient
 from src.integrations.replicate_image_client import (
     FLUX2_DEV_PRICE_PER_MEGAPIXEL_USD_UNVERIFIED,
@@ -114,6 +116,12 @@ CAPTION_MIN_SECONDS = 2.0
 # every character; this just stops that real inference from being
 # thrown away before it reaches the image prompt.
 _GENDER_NOUN = {"male": "a man", "female": "a woman"}
+
+
+# (line, finished clip, its attempt number from 1, whether "redo" is
+# allowed, a note to show the owner) -> "accept" | "pick:<attempt>" (an
+# earlier attempt of this line) | "redo" | "skip" | "stop". Called from produce()'s worker thread.
+ClipReviewer = Callable[[DialogueLine, ProducedDialogueClip, int, bool, str], str]
 
 
 class DialoguePipelineError(Exception):
@@ -245,6 +253,10 @@ class DialoguePipeline:
         # see this class's own produce() docstring for exactly which
         # exchanges qualify and why.
         multitalk_client: MultiTalkVideoClient | None = None,
+        # Optional per-line limit on the clip reviewer's "redo" (see
+        # produce()). None (the default, owner's choice 2026-10-26): no
+        # per-line limit - max_cost_usd still caps the whole episode.
+        max_review_attempts: int | None = None,
         # Real finding, 2026-10-21 ("و لماذا تتسرب الأسعار ... ألم تقل لك
         # من قبل؟"): the real rate for whichever client is actually wired
         # in must be passed explicitly by the caller (src/app.py) - never
@@ -292,6 +304,7 @@ class DialoguePipeline:
         # never silently run the real bill past what was agreed to.
         self._max_cost_usd = max_cost_usd
         self._multitalk_client = multitalk_client
+        self._max_review_attempts = max_review_attempts
 
     @property
     def cinematic_shots_enabled(self) -> bool:
@@ -324,7 +337,17 @@ class DialoguePipeline:
             f.write(image_bytes)
         return cache_path
 
-    def produce(self, screenplay: DialogueScreenplay) -> ProducedDialogueEpisode:
+    def produce(self, screenplay: DialogueScreenplay, clip_reviewer: ClipReviewer | None = None) -> ProducedDialogueEpisode:
+        """`clip_reviewer` (owner's choice, 2026-10-26 - "هكذا يعجبني"):
+        when given, every finished single-speaker clip is handed to it
+        before the next line starts, and it answers "accept", "pick:<n>"
+        (keep an earlier attempt of this line instead), "redo", "skip"
+        (drop this line, go on) or "stop". A redo pays for the line again (and for a new shot still in
+        cinematic mode);
+        the rejected clip's real cost still counts toward the ceiling and
+        the total. "stop" - or the reviewer failing - spends nothing more:
+        every later spoken line fails at $0. Caption lines (free) and
+        MultiTalk pairs are not reviewed."""
         os.makedirs(self._output_dir, exist_ok=True)
         slug = _slug(screenplay.title)
         characters_by_name = {c.name: c for c in screenplay.characters}
@@ -420,6 +443,12 @@ class DialoguePipeline:
         # balance too low) - every later spoken line fails at $0 instead
         # of each paying for a still first.
         stop_reason: str | None = None
+        rejected_cost_usd = 0.0
+        review_attempts: dict[int, int] = {}
+        # Every earlier attempt of a line under review, kept on disk so the
+        # owner can still pick it: line index -> [(attempt, clip)].
+        earlier_attempts: dict[int, list[tuple[int, ProducedDialogueClip]]] = {}
+        review_notes: dict[int, str] = {}
         i = 0
         n = len(screenplay.lines)
         while i < n:
@@ -545,6 +574,14 @@ class DialoguePipeline:
                 i += 2
                 continue
 
+            if self._max_cost_usd is not None and spent_so_far >= self._max_cost_usd and earlier_attempts.get(line.index):
+                # A redo hit the ceiling: keep the latest attempt the owner
+                # already saw rather than losing the line - no new spend.
+                _, kept = earlier_attempts.pop(line.index)[-1]
+                rejected_cost_usd -= kept.cost_usd
+                clips.append(kept)
+                i += 1
+                continue
             if self._max_cost_usd is not None and spent_so_far >= self._max_cost_usd:
                 # The ceiling was already reached by an earlier real,
                 # already-paid line - this and every remaining SPOKEN
@@ -589,8 +626,13 @@ class DialoguePipeline:
             # message can say which case actually happened.
             billed = False
             shot_billed = False
+            clips_before = len(clips)
+            attempt = review_attempts.get(line.index, 1)
+            shown_attempt = attempt
             try:
-                prefix = f"{slug}_line{line.index:03d}"
+                # Each review attempt gets its own files, so an earlier one
+                # can still be picked after a redo.
+                prefix = f"{slug}_line{line.index:03d}" + (f"_try{attempt}" if attempt > 1 else "")
                 audio_bytes = self._tts.synthesize(
                     line.line, character.voice, lang=self._tts_lang, prosody=_line_prosody(screenplay, line)
                 )
@@ -651,13 +693,13 @@ class DialoguePipeline:
                     # caller (src/app.py). See this class's own __init__
                     # docstring comment for why this is never a hard-coded
                     # import any more.
-                    cost = self._fal_video.billed_seconds(duration) * self._price_per_second_usd
+                    cost = self._clip_cost(duration)
                     clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
                     spent_so_far += cost
                 except Exception as probe_exc:
                     try:
                         duration = _ffprobe_duration(audio_path)
-                        cost = self._fal_video.billed_seconds(duration) * self._price_per_second_usd
+                        cost = self._clip_cost(duration)
                         clips.append(ProducedDialogueClip(line=line, local_path=clip_path, cost_usd=cost))
                         spent_so_far += cost
                     except Exception:
@@ -681,13 +723,67 @@ class DialoguePipeline:
                         "لم يُنفَّذ (بدون أي تكلفة): رصيد حساب RunPod منخفض جداً لتشغيل السيرفر - "
                         "اشحن الرصيد ثم أعد المحاولة"
                     )
-                if billed:
+                elif isinstance(exc, KlingBalanceError):
+                    stop_reason = (
+                        "لم يُنفَّذ (بدون أي تكلفة): باقة Kling منتهية أو غير كافية - "
+                        "اشترِ باقة ثم أعد المحاولة"
+                    )
+                partial_cost = None if billed else self._fal_video.last_cost_usd()
+                if partial_cost:
+                    # Kling: the paid motion shot exists, a later step
+                    # (face / lip sync) failed - counted against the ceiling.
+                    spent_so_far += partial_cost
+                    rejected_cost_usd += partial_cost
+                    message = f"[تم صرف ${partial_cost:.2f} حقيقية عند مزود الفيديو قبل هذا الفشل] {message}"
+                elif billed:
                     message = f"[تم صرف مال حقيقي عند fal.ai قبل هذا الفشل - راجع لوحة fal.ai] {message}"
                 elif shot_billed:
                     message = f"[تم صرف مال حقيقي على صورة اللقطة (flux-2-dev) قبل هذا الفشل] {message}"
-                failed_lines.append((line, message))
-                i += 1
-                continue
+                if clip_reviewer is not None and earlier_attempts.get(line.index) and stop_reason is None:
+                    # A redo failed: show the owner their latest earlier
+                    # attempt again instead of losing the line.
+                    shown_attempt, restored = earlier_attempts[line.index].pop()
+                    rejected_cost_usd -= restored.cost_usd
+                    clips.append(restored)
+                    review_attempts[line.index] = attempt + 1
+                    review_notes[line.index] = f"⚠️ المحاولة {attempt} فشلت: {message}"
+                else:
+                    failed_lines.append((line, message))
+                    i += 1
+                    continue
+
+            if clip_reviewer is not None and len(clips) > clips_before:
+                next_attempt = review_attempts.get(line.index, 1)
+                if shown_attempt == next_attempt:
+                    next_attempt += 1
+                can_redo = self._max_review_attempts is None or next_attempt <= self._max_review_attempts
+                try:
+                    decision = clip_reviewer(
+                        line, clips[-1], shown_attempt, can_redo, review_notes.pop(line.index, "")
+                    )
+                except Exception as exc:
+                    decision = "stop"
+                    stop_reason = f"لم يُنفَّذ (بدون أي تكلفة): تعذّر عرض اللقطة عليك للمراجعة فتوقف الإنتاج - {exc}"
+                if decision.startswith("pick:"):
+                    picked = int(decision.split(":", 1)[1])
+                    previous = dict(earlier_attempts.get(line.index, []))
+                    if picked != shown_attempt and picked in previous:
+                        current = clips.pop()
+                        rejected_cost_usd += current.cost_usd - previous[picked].cost_usd
+                        clips.append(previous[picked])
+                    decision = "accept"
+                if decision == "redo" and can_redo:
+                    current = clips.pop()
+                    rejected_cost_usd += current.cost_usd
+                    earlier_attempts.setdefault(line.index, []).append((shown_attempt, current))
+                    review_attempts[line.index] = next_attempt
+                    continue
+                if decision == "skip":
+                    rejected_cost_usd += clips.pop().cost_usd
+                    failed_lines.append((line, "تخطّيتَ هذا السطر من زر التخطّي - ثمن محاولاته محسوب في المجموع"))
+                earlier_attempts.pop(line.index, None)
+                if decision == "stop" and stop_reason is None:
+                    stop_reason = "لم يُنفَّذ (بدون أي تكلفة): أوقفتَ الإنتاج من زر الإيقاف"
             i += 1
 
         # Real incident, 2026-10-20: a real run paid for and finished
@@ -719,7 +815,14 @@ class DialoguePipeline:
             portrait_cost_usd=portrait_cost_usd,
             portrait_failures=portrait_failures,
             shot_image_cost_usd=shot_image_cost_usd,
+            rejected_cost_usd=rejected_cost_usd,
         )
+
+    def _clip_cost(self, clip_duration_seconds: float) -> float:
+        reported = self._fal_video.last_cost_usd()
+        if reported is not None:
+            return reported
+        return self._fal_video.billed_seconds(clip_duration_seconds) * self._price_per_second_usd
 
     def _generate_shot_still(
         self,

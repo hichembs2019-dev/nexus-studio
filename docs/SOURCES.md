@@ -1968,3 +1968,15 @@ Owner's complaint: every produced clip looked like a narrator - one person facin
 - Face-consistency options rejected for now: PuLID / InstantID / IP-Adapter FaceID all need InsightFace models, whose README says "non-commercial research purposes only" - this project publishes to YouTube.
 
 **Still unverified, said plainly:** no real run of this chain yet; real face consistency across shots; the real billed price; whether Replicate-hosted FLUX.2 [dev] output may be used commercially; and the self-hosted S2V graph at 832x480 (only 640x640 was proven; 832x480 was proven for MultiTalk on the same pod).
+
+## Kling motion + lip sync client, off by default (2026-10-25)
+
+Why: the real 2026-10-24 run showed Wan S2V only animates a talking speaker (static camera, almost no body motion). The owner chose, on a decision card, to build a Kling client after the plan's claims were checked against official docs (no paid call made).
+
+What `src/integrations/kling_video_client.py` does per spoken line: (1) `POST /image-to-video/kling-3.0` from the shot still, silent, duration = audio rounded up to whole seconds (3..15); (2) `POST /v1/videos/identify-face` on the generated `video_id`; (3) `POST /v1/videos/advanced-lip-sync` with the line's TTS audio on the longest-visible face. Request shapes were copied from kling.ai/document-api (Authentication, Kling 3.0 & 3.0 Omni, Lip Sync, Face Recognition, Error Codes pages, rendered 2026-10-25).
+
+Prices from kling.ai/dev/pricing (2026-10-25): $0.14/unit (180-day packs, from $700) or $0.098/unit (trial, $9.8 = 100 units, 30 days). 720p Kling 3.0 without audio 0.6 unit/s, Face Recognition 0.05/call, Lip Sync 0.5 per 5 s. Each clip's cost is taken from Kling's own reported deductions; the table is only a fallback.
+
+Switch: `KLING_VIDEO_ENABLED=true` + `KLING_API_KEY` (both synced by deploy.yml from repo secrets; no default). When on, it is preferred over both Wan S2V paths; MultiTalk is not used.
+
+**Not verified - no real call has been made:** that `first_frame` accepts raw Base64; that identify-face accepts a `video_id` from the newer `/image-to-video` endpoint; Arabic lip accuracy (Kling's docs name no language); lip sync on a moving/small/side-on face. Lip sync handles one person per task (Kling's docs).

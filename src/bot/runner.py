@@ -106,13 +106,20 @@ message however it is phrased, free conversation included.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import functools
 import logging
 import os
+import secrets
 
 from src.bot.conversation import BotConversation, split_for_telegram
 from src.workflows.dialogue_pipeline import DialoguePipeline
 
 logger = logging.getLogger("nexus_studio.runner")
+
+# How long one clip waits for the owner's ✅/🔁/⏹️ before production stops
+# on its own (spending nothing more).
+REVIEW_TIMEOUT_SECONDS = 6 * 3600
 
 
 def _markup(buttons):
@@ -299,10 +306,65 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         if send_failures:
             raise RuntimeError("some clips did not reach you: " + "; ".join(send_failures))
 
+    # Owner's choice, 2026-10-26 ("هكذا يعجبني"): every finished clip is
+    # sent to the owner and production waits for a tap. Every attempt of a
+    # line keeps its own "✅ اعتمد هذه" button until the line is decided, so
+    # an earlier attempt can still be chosen after several redos.
+    # line key -> (chat_id, future the worker thread is blocked on)
+    _line_waits: dict[str, tuple[str, concurrent.futures.Future]] = {}
+    # button token -> (chat_id, line key, attempt it was sent with)
+    _clip_tokens: dict[str, tuple[str, str, int]] = {}
+
+    async def _send_review(chat_id: str, context: ContextTypes.DEFAULT_TYPE, clip_path: str, text: str, buttons) -> None:
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        markup = InlineKeyboardMarkup([[InlineKeyboardButton(label, callback_data=data)] for label, data in buttons])
+        with open(clip_path, "rb") as f:
+            await context.bot.send_video(chat_id=chat_id, video=f, caption=text[:1024], reply_markup=markup)
+
+    def _make_reviewer(chat_id: str, context: ContextTypes.DEFAULT_TYPE, loop: asyncio.AbstractEventLoop):
+        run_id = secrets.token_hex(4)
+
+        def review(line, clip, attempt: int, can_redo: bool, note: str = "") -> str:
+            key = f"{run_id}:{line.index}"
+            token = secrets.token_hex(6)
+            decision: concurrent.futures.Future = concurrent.futures.Future()
+            _line_waits[key] = (chat_id, decision)
+            _clip_tokens[token] = (chat_id, key, attempt)
+            buttons = [("✅ اعتمد هذه", f"clip:pick:{token}")]
+            if can_redo:
+                buttons.append(("🔁 أعد", f"clip:redo:{token}"))
+            buttons.append(("⏭️ تخطَّ السطر", f"clip:skip:{token}"))
+            buttons.append(("⏹️ أوقف", f"clip:stop:{token}"))
+            text = (
+                (f"{note}\n" if note else "")
+                + f"🎬 السطر {line.index + 1} - المحاولة {attempt}\n{line.character}: {line.line}\n"
+                f"تكلفة هذه اللقطة: ${clip.cost_usd:.3f}"
+                + ("\n🔁 الإعادة تُدفع من جديد. المحاولات السابقة تبقى قابلة للاعتماد من أزرارها." if can_redo else "")
+            )
+            result = "stop"
+            try:
+                asyncio.run_coroutine_threadsafe(_send_review(chat_id, context, clip.local_path, text, buttons), loop).result(timeout=300)
+                try:
+                    result = decision.result(timeout=REVIEW_TIMEOUT_SECONDS)
+                except concurrent.futures.TimeoutError:
+                    result = "stop"
+                return result
+            finally:
+                _line_waits.pop(key, None)
+                if result != "redo":
+                    for t in [t for t, v in _clip_tokens.items() if v[1] == key]:
+                        _clip_tokens.pop(t, None)
+
+        return review
+
     async def _produce_and_notify(chat_id: str, screenplay, context: ContextTypes.DEFAULT_TYPE) -> None:
         loop = asyncio.get_running_loop()
         try:
-            produced = await loop.run_in_executor(None, dialogue_pipeline.produce, screenplay)
+            produced = await loop.run_in_executor(
+                None,
+                functools.partial(dialogue_pipeline.produce, screenplay, clip_reviewer=_make_reviewer(chat_id, context, loop)),
+            )
         except Exception as exc:
             await _notify_or_log(
                 chat_id, context,
@@ -500,7 +562,23 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         _cancel_debounce(chat_id)
         data = query.data
 
-        if data == "approve":
+        if data.startswith("clip:"):
+            _, action, token = data.split(":", 2)
+            target = _clip_tokens.get(token)
+            waiting = _line_waits.get(target[1]) if target is not None else None
+            if target is None or target[0] != chat_id or waiting is None or waiting[1].done():
+                await _notify_or_log(chat_id, context, "هذه اللقطة لم تعد تنتظر قرارك.")
+                return
+            attempt = target[2]
+            waiting[1].set_result(f"pick:{attempt}" if action == "pick" else action)
+            labels = {
+                "pick": f"✅ اعتُمدت المحاولة {attempt}. ننتقل للسطر التالي.",
+                "redo": "🔁 تُعاد هذه اللقطة الآن.",
+                "skip": "⏭️ تخطّينا هذا السطر. ننتقل للتالي.",
+                "stop": "⏹️ توقف الإنتاج. لن يُصرف شيء آخر.",
+            }
+            await _notify_or_log(chat_id, context, labels.get(action, action))
+        elif data == "approve":
             reply, screenplay = conversation.handle_approve(chat_id)
             await _send_reply(chat_id, context, reply)
             if screenplay is not None:

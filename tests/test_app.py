@@ -1,4 +1,5 @@
 from __future__ import annotations
+import pytest
 
 from src.app import build_app
 from src.config import Settings
@@ -139,3 +140,24 @@ def test_gemini_writes_the_screenplay_with_groq_as_its_fallback():
     writer_client = app.conversation._dialogue_writer._reasoning_client
     assert isinstance(writer_client, RealGeminiReasoningClient)
     assert isinstance(writer_client._fallback, RealGroqReasoningClient)
+
+
+def test_build_app_prefers_kling_only_when_the_owner_turned_it_on():
+    from src.integrations.kling_video_client import KlingVideoClient, estimated_price_per_second_usd
+
+    pod = dict(replicate_api_token="r8_real", runpod_api_key="rp", runpod_s2v_pod_id="pod1")
+    # A key alone changes nothing.
+    app = build_app(_settings(**pod, kling_api_key="k"))
+    assert isinstance(app.video_client, SelfHostedS2VVideoClient)
+
+    app = build_app(_settings(**pod, kling_api_key="k", kling_video_enabled=True, kling_unit_price_usd=0.098))
+    assert isinstance(app.video_client, KlingVideoClient)
+    assert app.dialogue_pipeline._multitalk_client is None
+    assert app.dialogue_pipeline._price_per_second_usd == pytest.approx(estimated_price_per_second_usd(0.098))
+    assert app.conversation._price_per_second_usd == pytest.approx(estimated_price_per_second_usd(0.098))
+
+
+def test_kling_is_off_by_default_in_settings_from_env(monkeypatch):
+    monkeypatch.delenv("KLING_VIDEO_ENABLED", raising=False)
+    monkeypatch.setenv("KLING_API_KEY", "k")
+    assert Settings.from_env().kling_configured is False
