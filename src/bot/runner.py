@@ -323,6 +323,7 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
             buttons = [("✅ قبول", f"clip:accept:{token}")]
             if can_redo:
                 buttons.append(("🔁 أعد", f"clip:redo:{token}"))
+            buttons.append(("⏭️ تخطَّ السطر", f"clip:skip:{token}"))
             buttons.append(("⏹️ أوقف", f"clip:stop:{token}"))
             text = (
                 f"🎬 السطر {line.index + 1} - المحاولة {attempt}\n{line.character}: {line.line}\n"
@@ -555,7 +556,7 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
                 await query.edit_message_reply_markup(reply_markup=None)
             except Exception as exc:
                 logger.warning("could not remove review buttons in chat %s: %s", chat_id, exc)
-            labels = {"accept": "✅ قُبلت. ننتقل للسطر التالي.", "redo": "🔁 تُعاد هذه اللقطة الآن.", "stop": "⏹️ توقف الإنتاج. لن يُصرف شيء آخر."}
+            labels = {"accept": "✅ قُبلت. ننتقل للسطر التالي.", "redo": "🔁 تُعاد هذه اللقطة الآن.", "skip": "⏭️ تخطّينا هذا السطر. ننتقل للتالي.", "stop": "⏹️ توقف الإنتاج. لن يُصرف شيء آخر."}
             await _notify_or_log(chat_id, context, labels.get(decision, decision))
         elif data == "approve":
             reply, screenplay = conversation.handle_approve(chat_id)

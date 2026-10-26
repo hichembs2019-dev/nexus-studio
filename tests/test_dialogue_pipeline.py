@@ -1344,3 +1344,29 @@ def test_review_failure_stops_production(tmp_path):
 
     assert len(video.calls) == 1
     assert "telegram down" in produced.failed_lines[0][1]
+
+
+def test_review_skip_drops_only_that_line_and_counts_its_cost(tmp_path):
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    video = _ReportingVideoClient(clip_bytes, costs=[0.4, 0.5, 0.6], errors=[None] * 3)
+    pipeline = DialoguePipeline(video, MockTTSClient(), str(tmp_path), image_client=MockReplicateImageClient())
+    review, _ = _scripted_reviewer(["accept", "skip", "accept"])
+
+    produced = pipeline.produce(_three_line_screenplay(), clip_reviewer=review)
+
+    assert [c.line.index for c in produced.clips] == [0, 2]
+    assert produced.failed_lines[0][0].index == 1
+    assert produced.rejected_cost_usd == pytest.approx(0.5)
+
+
+def test_review_has_no_per_line_limit_by_default(tmp_path):
+    clip_bytes = _silent_mp4(str(tmp_path / "src.mp4"), duration_seconds=1.0)
+    video = _ReportingVideoClient(clip_bytes, costs=[0.1] * 8, errors=[None] * 8)
+    pipeline = DialoguePipeline(video, MockTTSClient(), str(tmp_path), image_client=MockReplicateImageClient())
+    review, calls = _scripted_reviewer(["redo"] * 5 + ["accept", "accept", "accept"])
+
+    produced = pipeline.produce(_three_line_screenplay(), clip_reviewer=review)
+
+    assert all(can_redo for _, _, can_redo, _ in calls)
+    assert len(video.calls) == 8
+    assert produced.rejected_cost_usd == pytest.approx(0.5)

@@ -119,7 +119,7 @@ _GENDER_NOUN = {"male": "a man", "female": "a woman"}
 
 
 # (line, finished clip, attempt number from 1, whether "redo" is allowed)
-# -> "accept" | "redo" | "stop". Called from produce()'s worker thread.
+# -> "accept" | "redo" | "skip" | "stop". Called from produce()'s worker thread.
 ClipReviewer = Callable[[DialogueLine, ProducedDialogueClip, int, bool], str]
 
 
@@ -252,10 +252,10 @@ class DialoguePipeline:
         # see this class's own produce() docstring for exactly which
         # exchanges qualify and why.
         multitalk_client: MultiTalkVideoClient | None = None,
-        # Per-line limit on the clip reviewer's "redo" (see produce()):
-        # the last attempt can only be accepted or stopped, so one line
-        # can never be re-paid for without bound.
-        max_review_attempts: int = 3,
+        # Optional per-line limit on the clip reviewer's "redo" (see
+        # produce()). None (the default, owner's choice 2026-10-26): no
+        # per-line limit - max_cost_usd still caps the whole episode.
+        max_review_attempts: int | None = None,
         # Real finding, 2026-10-21 ("و لماذا تتسرب الأسعار ... ألم تقل لك
         # من قبل؟"): the real rate for whichever client is actually wired
         # in must be passed explicitly by the caller (src/app.py) - never
@@ -339,8 +339,8 @@ class DialoguePipeline:
     def produce(self, screenplay: DialogueScreenplay, clip_reviewer: ClipReviewer | None = None) -> ProducedDialogueEpisode:
         """`clip_reviewer` (owner's choice, 2026-10-26 - "هكذا يعجبني"):
         when given, every finished single-speaker clip is handed to it
-        before the next line starts, and it answers "accept", "redo" or
-        "stop". A redo pays for the line again (and for a new shot still in
+        before the next line starts, and it answers "accept", "redo",
+        "skip" (drop this line, go on) or "stop". A redo pays for the line again (and for a new shot still in
         cinematic mode);
         the rejected clip's real cost still counts toward the ceiling and
         the total. "stop" - or the reviewer failing - spends nothing more:
@@ -726,7 +726,7 @@ class DialoguePipeline:
 
             if clip_reviewer is not None and len(clips) > clips_before:
                 attempt = review_attempts.get(line.index, 1)
-                can_redo = attempt < self._max_review_attempts
+                can_redo = self._max_review_attempts is None or attempt < self._max_review_attempts
                 try:
                     decision = clip_reviewer(line, clips[-1], attempt, can_redo)
                 except Exception as exc:
@@ -736,6 +736,9 @@ class DialoguePipeline:
                     rejected_cost_usd += clips.pop().cost_usd
                     review_attempts[line.index] = attempt + 1
                     continue
+                if decision == "skip":
+                    rejected_cost_usd += clips.pop().cost_usd
+                    failed_lines.append((line, "تخطّيتَ هذا السطر من زر التخطّي - ثمن محاولاته محسوب في المجموع"))
                 if decision == "stop" and stop_reason is None:
                     stop_reason = "لم يُنفَّذ (بدون أي تكلفة): أوقفتَ الإنتاج من زر الإيقاف"
             i += 1
