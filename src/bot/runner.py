@@ -106,13 +106,20 @@ message however it is phrased, free conversation included.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import functools
 import logging
 import os
+import secrets
 
 from src.bot.conversation import BotConversation, split_for_telegram
 from src.workflows.dialogue_pipeline import DialoguePipeline
 
 logger = logging.getLogger("nexus_studio.runner")
+
+# How long one clip waits for the owner's ✅/🔁/⏹️ before production stops
+# on its own (spending nothing more).
+REVIEW_TIMEOUT_SECONDS = 6 * 3600
 
 
 def _markup(buttons):
@@ -299,10 +306,47 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         if send_failures:
             raise RuntimeError("some clips did not reach you: " + "; ".join(send_failures))
 
+    # Owner's choice, 2026-10-26 ("هكذا يعجبني"): every finished clip is
+    # sent to the owner with ✅ / 🔁 / ⏹️ and production waits for the tap.
+    # token -> (chat_id, future the worker thread is blocked on)
+    _pending_reviews: dict[str, tuple[str, concurrent.futures.Future]] = {}
+
+    async def _send_review(chat_id: str, context: ContextTypes.DEFAULT_TYPE, clip_path: str, text: str, buttons) -> None:
+        with open(clip_path, "rb") as f:
+            await context.bot.send_video(chat_id=chat_id, video=f, caption=text[:1024], reply_markup=_markup(buttons))
+
+    def _make_reviewer(chat_id: str, context: ContextTypes.DEFAULT_TYPE, loop: asyncio.AbstractEventLoop):
+        def review(line, clip, attempt: int, can_redo: bool) -> str:
+            token = secrets.token_hex(6)
+            decision: concurrent.futures.Future = concurrent.futures.Future()
+            _pending_reviews[token] = (chat_id, decision)
+            buttons = [("✅ قبول", f"clip:accept:{token}")]
+            if can_redo:
+                buttons.append(("🔁 أعد", f"clip:redo:{token}"))
+            buttons.append(("⏹️ أوقف", f"clip:stop:{token}"))
+            text = (
+                f"🎬 السطر {line.index + 1} - المحاولة {attempt}\n{line.character}: {line.line}\n"
+                f"تكلفة هذه اللقطة: ${clip.cost_usd:.3f}"
+                + ("\n🔁 الإعادة تُدفع من جديد." if can_redo else "\nهذه آخر محاولة لهذا السطر.")
+            )
+            try:
+                asyncio.run_coroutine_threadsafe(_send_review(chat_id, context, clip.local_path, text, buttons), loop).result(timeout=300)
+                try:
+                    return decision.result(timeout=REVIEW_TIMEOUT_SECONDS)
+                except concurrent.futures.TimeoutError:
+                    return "stop"
+            finally:
+                _pending_reviews.pop(token, None)
+
+        return review
+
     async def _produce_and_notify(chat_id: str, screenplay, context: ContextTypes.DEFAULT_TYPE) -> None:
         loop = asyncio.get_running_loop()
         try:
-            produced = await loop.run_in_executor(None, dialogue_pipeline.produce, screenplay)
+            produced = await loop.run_in_executor(
+                None,
+                functools.partial(dialogue_pipeline.produce, screenplay, clip_reviewer=_make_reviewer(chat_id, context, loop)),
+            )
         except Exception as exc:
             await _notify_or_log(
                 chat_id, context,
@@ -500,7 +544,20 @@ def build_application(bot_token: str, conversation: BotConversation, dialogue_pi
         _cancel_debounce(chat_id)
         data = query.data
 
-        if data == "approve":
+        if data.startswith("clip:"):
+            _, decision, token = data.split(":", 2)
+            pending = _pending_reviews.get(token)
+            if pending is None or pending[0] != chat_id or pending[1].done():
+                await _notify_or_log(chat_id, context, "هذه اللقطة لم تعد تنتظر قرارك.")
+                return
+            pending[1].set_result(decision)
+            try:
+                await query.edit_message_reply_markup(reply_markup=None)
+            except Exception as exc:
+                logger.warning("could not remove review buttons in chat %s: %s", chat_id, exc)
+            labels = {"accept": "✅ قُبلت. ننتقل للسطر التالي.", "redo": "🔁 تُعاد هذه اللقطة الآن.", "stop": "⏹️ توقف الإنتاج. لن يُصرف شيء آخر."}
+            await _notify_or_log(chat_id, context, labels.get(decision, decision))
+        elif data == "approve":
             reply, screenplay = conversation.handle_approve(chat_id)
             await _send_reply(chat_id, context, reply)
             if screenplay is not None:

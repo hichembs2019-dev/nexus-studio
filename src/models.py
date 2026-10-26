@@ -252,10 +252,16 @@ class ProducedDialogueEpisode:
     # Cinematic shot mode: the real cost of every flux-2-dev shot still
     # generated in this run, including stills whose video then failed.
     shot_image_cost_usd: float = 0.0
+    # Clips the owner rejected with "redo" during review - paid for, not
+    # in the final video.
+    rejected_cost_usd: float = 0.0
 
     @property
     def total_cost_usd(self) -> float:
-        return sum(c.cost_usd for c in self.clips) + self.portrait_cost_usd + self.shot_image_cost_usd
+        return (
+            sum(c.cost_usd for c in self.clips) + self.portrait_cost_usd + self.shot_image_cost_usd
+            + self.rejected_cost_usd
+        )
 
 
 @dataclass

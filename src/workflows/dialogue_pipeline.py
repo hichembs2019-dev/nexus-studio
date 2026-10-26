@@ -31,6 +31,7 @@ import hashlib
 import mimetypes
 import os
 import subprocess
+from typing import Callable
 
 from src.agents.shot_director import ShotDirectorAgent
 from src.integrations.kling_video_client import KlingBalanceError
@@ -115,6 +116,11 @@ CAPTION_MIN_SECONDS = 2.0
 # every character; this just stops that real inference from being
 # thrown away before it reaches the image prompt.
 _GENDER_NOUN = {"male": "a man", "female": "a woman"}
+
+
+# (line, finished clip, attempt number from 1, whether "redo" is allowed)
+# -> "accept" | "redo" | "stop". Called from produce()'s worker thread.
+ClipReviewer = Callable[[DialogueLine, ProducedDialogueClip, int, bool], str]
 
 
 class DialoguePipelineError(Exception):
@@ -246,6 +252,10 @@ class DialoguePipeline:
         # see this class's own produce() docstring for exactly which
         # exchanges qualify and why.
         multitalk_client: MultiTalkVideoClient | None = None,
+        # Per-line limit on the clip reviewer's "redo" (see produce()):
+        # the last attempt can only be accepted or stopped, so one line
+        # can never be re-paid for without bound.
+        max_review_attempts: int = 3,
         # Real finding, 2026-10-21 ("و لماذا تتسرب الأسعار ... ألم تقل لك
         # من قبل؟"): the real rate for whichever client is actually wired
         # in must be passed explicitly by the caller (src/app.py) - never
@@ -293,6 +303,7 @@ class DialoguePipeline:
         # never silently run the real bill past what was agreed to.
         self._max_cost_usd = max_cost_usd
         self._multitalk_client = multitalk_client
+        self._max_review_attempts = max_review_attempts
 
     @property
     def cinematic_shots_enabled(self) -> bool:
@@ -325,7 +336,16 @@ class DialoguePipeline:
             f.write(image_bytes)
         return cache_path
 
-    def produce(self, screenplay: DialogueScreenplay) -> ProducedDialogueEpisode:
+    def produce(self, screenplay: DialogueScreenplay, clip_reviewer: ClipReviewer | None = None) -> ProducedDialogueEpisode:
+        """`clip_reviewer` (owner's choice, 2026-10-26 - "هكذا يعجبني"):
+        when given, every finished single-speaker clip is handed to it
+        before the next line starts, and it answers "accept", "redo" or
+        "stop". A redo pays for the line again (and for a new shot still in
+        cinematic mode);
+        the rejected clip's real cost still counts toward the ceiling and
+        the total. "stop" - or the reviewer failing - spends nothing more:
+        every later spoken line fails at $0. Caption lines (free) and
+        MultiTalk pairs are not reviewed."""
         os.makedirs(self._output_dir, exist_ok=True)
         slug = _slug(screenplay.title)
         characters_by_name = {c.name: c for c in screenplay.characters}
@@ -421,6 +441,8 @@ class DialoguePipeline:
         # balance too low) - every later spoken line fails at $0 instead
         # of each paying for a still first.
         stop_reason: str | None = None
+        rejected_cost_usd = 0.0
+        review_attempts: dict[int, int] = {}
         i = 0
         n = len(screenplay.lines)
         while i < n:
@@ -590,6 +612,7 @@ class DialoguePipeline:
             # message can say which case actually happened.
             billed = False
             shot_billed = False
+            clips_before = len(clips)
             try:
                 prefix = f"{slug}_line{line.index:03d}"
                 audio_bytes = self._tts.synthesize(
@@ -700,6 +723,21 @@ class DialoguePipeline:
                 failed_lines.append((line, message))
                 i += 1
                 continue
+
+            if clip_reviewer is not None and len(clips) > clips_before:
+                attempt = review_attempts.get(line.index, 1)
+                can_redo = attempt < self._max_review_attempts
+                try:
+                    decision = clip_reviewer(line, clips[-1], attempt, can_redo)
+                except Exception as exc:
+                    decision = "stop"
+                    stop_reason = f"لم يُنفَّذ (بدون أي تكلفة): تعذّر عرض اللقطة عليك للمراجعة فتوقف الإنتاج - {exc}"
+                if decision == "redo" and can_redo:
+                    rejected_cost_usd += clips.pop().cost_usd
+                    review_attempts[line.index] = attempt + 1
+                    continue
+                if decision == "stop" and stop_reason is None:
+                    stop_reason = "لم يُنفَّذ (بدون أي تكلفة): أوقفتَ الإنتاج من زر الإيقاف"
             i += 1
 
         # Real incident, 2026-10-20: a real run paid for and finished
@@ -731,6 +769,7 @@ class DialoguePipeline:
             portrait_cost_usd=portrait_cost_usd,
             portrait_failures=portrait_failures,
             shot_image_cost_usd=shot_image_cost_usd,
+            rejected_cost_usd=rejected_cost_usd,
         )
 
     def _clip_cost(self, clip_duration_seconds: float) -> float:
